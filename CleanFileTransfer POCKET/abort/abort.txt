@@ -1,0 +1,1 @@
+Quick way to abort. Can be used anywhere and it's flexible enough to any use, really.
