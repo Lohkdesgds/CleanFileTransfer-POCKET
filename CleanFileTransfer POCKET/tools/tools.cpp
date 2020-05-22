@@ -198,6 +198,22 @@ namespace LSW {
 
 				return b;
 			}
+			std::string byteAutoString(double end, const size_t t, const bool space) {
+				int prefix = -1;
+
+				while ((end /= (1e3)) >= 1.0) prefix++;
+				end *= 1e3;
+
+				char buf[1 << 7];
+				char format[1 << 5];
+
+				if (space) sprintf_s(format, "%c.%zulf %cs", '%', t, '%');
+				else sprintf_s(format, "%c.%zulf%cs", '%', t, '%');
+
+				sprintf_s(buf, format, end, prefix >= 0 ? known_size_ends[prefix] : "");
+
+				return buf;
+			}
 			std::vector<std::pair<std::string, std::string>> breakLines(const std::string a, const std::string spr, const std::string comment, const std::string endline)
 			{
 				std::vector<std::pair<std::string, std::string>> vectu;

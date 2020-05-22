@@ -11,9 +11,14 @@
 #include "filesystem/filesystem.h"
 #include "display_cmd.h"
 
+#ifdef _DEBUG
+#define IGNORE_TIMEOUT
+#endif
+
+
 using namespace LSW::v5;
 
-const std::string version_app = "CleanFileTransfer POCKET beta 0.1b";
+const std::string version_app = "CleanFileTransfer POCKET beta 0.5b";
 const std::string discord_link = std::string("ht") + std::string("tps://discord.gg/a5G") + "GgBt";
 
 enum class packages_id {VERSION_CHECK=1, MESSAGE, PASSWORD_CHECK, FILE_AVAILABLE, FILE_RECEIVING, FILE_SIZE, FILE_OPEN, FILE_CLOSE};
@@ -21,7 +26,7 @@ enum class packages_id {VERSION_CHECK=1, MESSAGE, PASSWORD_CHECK, FILE_AVAILABLE
 
 struct user_input {
 	std::string input_going_on;
-	std::mutex m;
+	SuperMutex m;
 	bool die = false;
 	bool hasbreak = false;
 
@@ -43,9 +48,9 @@ std::string shrinkText(std::string, const size_t, const ULONGLONG, const ULONGLO
 void cleanAvoidPath(std::string&);
 
 // Automatically sends a file through the con_client. Mutex guarantee package read, Bool is for "kill" if needed, second bool is to tell you if it is working on something
-void sendFileAuto(std::mutex&, bool&, Sockets::con_client*, std::vector<std::pair<std::string, short>>&, bool&, std::string&);
+void sendFileAuto(SuperMutex&, bool&, Sockets::con_client*, std::vector<std::pair<std::string, short>>&, bool&, std::string&);
 // Handles packages. It will save messages on the vector. Mutex guarantee package read, First bool is "kill". Files are saved if second bool is true, else discarded. It dies automatically if connection dies too. Last std::string is for messages from "system"
-void handlePackages(std::mutex&, bool&, Sockets::con_client*, bool&, std::vector<Sockets::final_package>&, std::string&);
+void handlePackages(SuperMutex&, bool&, Sockets::con_client*, bool&, std::vector<Sockets::final_package>&, std::string&);
 
 
 int main() {
@@ -63,7 +68,8 @@ int main() {
 	std::vector<Sockets::final_package> packages_coming;
 	bool is_file_transfer_enabled = false;
 	std::string system_message;
-	std::mutex transf_m;
+	std::string internal_message;
+	SuperMutex transf_m;
 
 
 	std::thread thr_input([&]() { input_handler(input); });
@@ -77,18 +83,18 @@ int main() {
 
 
 	display.setTitle([&]() {
-		std::string buf = version_app + " | Latest log: " + system_message + " ";
+		std::string buf = version_app + " | L: " + (system_message.length() > 0 ? system_message : "none") + " I: " + (internal_message.length() > 0 ? internal_message : "none") + " ";
 		if (host) {
 			size_t connected = 0;
 			for (auto& i : *host) {
 				connected += i->still_on();
 			}
-			buf += "| Hosting connected/total: " + std::to_string(connected) + "/" + std::to_string(host->size()) + " users ";
+			buf += "| C/T: " + std::to_string(connected) + "/" + std::to_string(host->size());
 		}
 		if (client) {
-			buf += "| Client ";
-			if (client->still_on()) buf += "connected";
-			else buf += "disconnected";
+			buf += "| C ";
+			if (client->still_on()) buf += "ON";
+			else buf += "OFF";
 		}
 		buf += " | Items: " + std::to_string(items_list.size());
 
@@ -126,7 +132,7 @@ int main() {
 		if (packages_coming.size() > 0) {
 			Sockets::final_package& pkg = packages_coming[0];
 			if (pkg.data_type == static_cast<int>(packages_id::MESSAGE)) {
-				display.newMessage("[Them -> You] " + pkg.variable_data);
+				display.newMessage("[Them -> You] " + std::string(pkg.variable_data.data()));
 			}
 			packages_coming.erase(packages_coming.begin());
 		}
@@ -278,6 +284,12 @@ int main() {
 						// create host
 						int line = 2;
 
+						if (client) {
+							display.printAt(line++, "You were as client. Cleaning up client...");
+							delete client;
+							client = nullptr;
+						}
+
 						if (host) {
 							host->setMaxConnections(1);
 							for (auto& i : *host) {
@@ -293,93 +305,78 @@ int main() {
 
 						input.clsInput();
 						display.setCommandEntry("");
-						{
 
-							if (line > display.getLineAmount() - 5) {
-								display.printAt(2, "(list too long, cleaned up)");
-								line = 3;
-								for (int u = 3; u < display.getLineAmount(); u++) {
-									display.printAt(u, "");
+						display.printAt(line++, "Waiting for new connection... (type anything to stop and cancel or wait 120 sec)");
+
+						auto timeout = GetTickCount64() + 120e3; // 60 sec
+						auto timedout_f = [&]()->bool {return (cancel |= ((GetTickCount64() > timeout) || (input.copyInput().length() != 0))); };
+
+						while (host->size() == 0 && !timedout_f()) Sleep(50);							
+
+						if (!cancel) {
+							auto& i = *host->begin();
+							i->hookPrint([&](std::string nm) { internal_message = nm; });
+
+							i->send({ version_app, static_cast<int>(packages_id::VERSION_CHECK) });
+
+							Sockets::final_package pkg1, pkg2;
+
+							while (!i->recv(pkg1) && i->still_on()) Sleep(20); // should be version
+							while (!i->recv(pkg2) && i->still_on()) Sleep(20); // should be password
+							{
+								bool failed = false;
+								if (failed |= (pkg1.data_type != static_cast<int>(packages_id::VERSION_CHECK))) {
+									display.printAt(line++, "The package ordering was not right... Version not found.");
 								}
-							}
-
-							display.printAt(line, "Waiting for new connection... (type anything to stop and cancel)");
-
-							auto timeout = GetTickCount64() + 10e3; // 60 sec
-							auto timedout_f = [&timeout,&cancel]()->bool {return (cancel |= (GetTickCount64() > timeout)); };
-
-							while (host->size() == 0 && !(cancel |= !(input.copyInput().length() == 0)) && !timedout_f()) Sleep(50);
-							
-
-							if (!cancel) {
-								auto& i = *host->begin();
-
-								i->send({ version_app, static_cast<int>(packages_id::VERSION_CHECK) });
-
-								int verif_count = 0;
-
-								while(verif_count < 2 && verif_count >= 0 && !timedout_f())
-								{
-									if (i->hasPackage()) {
-
-										Sockets::final_package pkg;
-
-										i->recv(pkg);
-										if (pkg.data_type == static_cast<int>(packages_id::VERSION_CHECK)) { // version
-											if (pkg.variable_data == version_app) {
-												display.printAt(line++, "Version match!");
-												verif_count++;
-											}
-											else {
-												display.printAt(line++, "Version not compatible.");
-												verif_count = -2;
-											}
-										}
-										if (pkg.data_type == static_cast<int>(packages_id::PASSWORD_CHECK)) { // pw
-											std::string pwww;
-											if (pkg.variable_data.length() > 4) {
-												pwww = pkg.variable_data.substr(4);
-												if (password == pwww) {
-													display.printAt(line++, "Password match!");
-													verif_count++;
-													i->send({ "OK", static_cast<int>(packages_id::PASSWORD_CHECK) });
-
-													// GOOD
-													if (thr_handle_packages) {
-														display.printAt(line++, "Cleaning up old connection stuff first...");
-														thr_handle_packages->join();
-														delete thr_handle_packages;
-													}
-													thr_handle_packages = new std::thread([&,i]() {handlePackages(transf_m, input.die, i, is_file_transfer_enabled, packages_coming, system_message); }); // if not connected, die.
-													display.printAt(line++, "Handling packages now!");
-												}
-												else {
-													display.printAt(line++, "Password NO MATCH!");
-													verif_count = -1;
-													i->send({ "NOPE", static_cast<int>(packages_id::PASSWORD_CHECK) });
-												}
-											}
-											else {
-												display.printAt(line++, "Password FAILED!");
-												verif_count = -1;
-												i->send({ "NOPE", static_cast<int>(packages_id::PASSWORD_CHECK) });
-											}
-										}
-									}
-									else Sleep(100);
+								if (failed |= (pkg2.data_type != static_cast<int>(packages_id::PASSWORD_CHECK))) {
+									display.printAt(line++, "The package ordering was not right... Password could not be verified.");
 								}
-
-								if (timedout_f() || verif_count < 2) {
-									display.printAt(line++, "Timed out or failed. Try again!");
-									host->setMaxConnections(0);
+								if (failed) {
 									i->kill_connection();
+									input.clsInput();
+									display.setCommandEntry("");
+									continue;
 								}
 							}
+
+							// VERSION STRING
+
+							if (pkg1.variable_data != version_app) {
+								display.printAt(line++, "Version not supported!");
+								i->kill_connection();
+								input.clsInput();
+								display.setCommandEntry("");
+								continue;
+							}
+
+							pkg2.variable_data.erase(0, 4);
+
+							// STRING PASSWORD
+							if (memcmp(password.data(), (pkg2.variable_data.data()), password.length()) == 0) {
+								display.printAt(line++, "Password match!");
+								i->send({ "OK", static_cast<int>(packages_id::PASSWORD_CHECK) });
+							}
+							else {
+								display.printAt(line++, "Password failed!");
+								i->kill_connection();
+								input.clsInput();
+								display.setCommandEntry("");
+								continue;
+							}
+
+							if (thr_handle_packages) {
+								display.printAt(line++, "Cleaning up old connection stuff first...");
+								thr_handle_packages->join();
+								delete thr_handle_packages;
+							}
+							thr_handle_packages = new std::thread([&, i]() {handlePackages(transf_m, input.die, i, is_file_transfer_enabled, packages_coming, system_message); }); // if not connected, die.
+
+							display.printAt(line++, "[!] Up and running!");
 						}
 
 						if (cancel) {
 							host->setMaxConnections(0);
-							display.printAt(line++, "User input or failed detected! Not waiting for new connections anymore.");
+							display.printAt(line++, "Time out or user input! Not accepting connections anymore.");
 							input.clsInput();
 							display.setCommandEntry("");
 						}
@@ -409,71 +406,77 @@ int main() {
 							delete client;
 						}
 
+						if (host) {
+							display.printAt(line++, "You were as host. Cleaning up host...");
+							delete host;
+							host = nullptr;
+						}
+
 						client = new Sockets::con_client();
+						client->hookPrint([&](std::string nm) {internal_message = nm; });
 
 						auto timeout = GetTickCount64() + 10e3; // 60 sec
 						auto timedout_f = [&timeout]()->bool {return GetTickCount64() > timeout; };
 
 						if (client->connect(ip.c_str())) {
-							display.printAt(line++, "Connected! Verifying version...");
+							display.printAt(line++, "Connected! Verifying...");
 
 							int rnd = GetTickCount64() % 1000 + 2000;
 
 							client->send({ version_app, static_cast<int>(packages_id::VERSION_CHECK) });
 							client->send({ std::to_string(rnd) + pw, 3 });
 
+							Sockets::final_package pkg1, pkg2;
 
-							int verif_count = 0;
-
-							while (verif_count < 2 && !timedout_f() && verif_count >= 0)
+							while (!client->recv(pkg1) && client->still_on()) Sleep(20); // should be version
+							while (!client->recv(pkg2) && client->still_on()) Sleep(20); // should be password
 							{
-								if (client->hasPackage()) {
-
-									Sockets::final_package pkg;
-									client->recv(pkg);
-									if (pkg.data_type == static_cast<int>(packages_id::VERSION_CHECK)) {
-										if (pkg.variable_data == version_app) {
-											display.printAt(line++, "Version match!");
-											verif_count++;
-										}
-										else {
-											display.printAt(line++, "Version not compatible.");
-											verif_count = -2;
-										}
-									}
-									if (pkg.data_type == static_cast<int>(packages_id::PASSWORD_CHECK)) {
-										if (pkg.variable_data == "OK") {
-											display.printAt(line++, "Password match!");
-											verif_count++;
-										}
-										else {
-											display.printAt(line++, "Password FAILED!");
-											verif_count = -1;
-										}
-									}
+								bool failed = false;
+								if (failed |= (pkg1.data_type != static_cast<int>(packages_id::VERSION_CHECK))) {
+									display.printAt(line++, "The package ordering was not right... Version not found.");
 								}
-								else Sleep(100);
+								if (failed |= (pkg2.data_type != static_cast<int>(packages_id::PASSWORD_CHECK))) {
+									display.printAt(line++, "The package ordering was not right... Password could not be verified.");
+								}
+								if (failed){
+									client->kill_connection();
+									input.clsInput();
+									display.setCommandEntry("");
+									continue;
+								}
 							}
-							if (verif_count < 2) {
-								display.printAt(line++, "Failed.");
+
+							// VERSION STRING
+
+							if (pkg1.variable_data != version_app) {
+								display.printAt(line++, "Version not supported!");
 								client->kill_connection();
 								input.clsInput();
 								display.setCommandEntry("");
+								continue;
 							}
-							else { // GOOD
 
-								display.printAt(line++, "Successfully connected! Initializing handler...");
+							// STRING PASSWORD
 
-								if (thr_handle_packages) {
-									display.printAt(line++, "Cleaning up old connection stuff first...");
-									thr_handle_packages->join();
-									delete thr_handle_packages;
-								}
-
-								thr_handle_packages = new std::thread([&, client]() {handlePackages(transf_m, input.die, client, is_file_transfer_enabled, packages_coming, system_message); }); // if not connected, die.
-
-								display.printAt(line++, "Handler up and running!");
+							if (pkg2.variable_data == "OK") {
+								display.printAt(line++, "Password match!");
 							}
+							else {
+								display.printAt(line++, "Password failed!");
+								client->kill_connection();
+								input.clsInput();
+								display.setCommandEntry("");
+								continue;
+							}
+
+							if (thr_handle_packages) {
+								display.printAt(line++, "Cleaning up old connection stuff first...");
+								thr_handle_packages->join();
+								delete thr_handle_packages;
+							}
+							thr_handle_packages = new std::thread([&, client]() {handlePackages(transf_m, input.die, client, is_file_transfer_enabled, packages_coming, system_message); }); // if not connected, die.
+
+							display.printAt(line++, "[!] Up and running!");
 						}
 						else {
 							display.printAt(line++, "Failed to connect!");
@@ -552,8 +555,8 @@ int main() {
 
 				}
 				else if (cmd == "show" || cmd == "s") { // show <page>					
-					int limit = display.getLineAmount() - 1;
-					int pagemax = 1 + (items_list.size() + 1) / limit;
+					int limit = static_cast<int>(display.getLineAmount()) - 1;
+					int pagemax = 1 + (static_cast<int>(items_list.size()) + 1) / limit;
 					int from = 0;
 					if (splut.size() > 1) {
 						if (!sscanf_s(splut[1].c_str(), "%d", &from)) {
@@ -686,6 +689,11 @@ int main() {
 				else if (cmd == "exit") {
 					dead = true;
 				}
+				else {
+				    display.printAt(0, "[@] 404 not found!");
+				    display.printAt(1, "Sorry, this command was not found!");
+				    display.printAt(2, "Need help? Try 'help' ;P");
+				}
 			}
 
 
@@ -749,7 +757,7 @@ void update_display(Custom::DISPLAY<100, 24>& d, bool& die) {
 }
 std::string shrinkText(std::string text, const size_t limit, const ULONGLONG ms, const ULONGLONG start, const size_t time_ticks_wait)
 {
-	int difference = text.length() - limit;
+	int difference = static_cast<int>(text.length() - limit);
 
 	if (difference > 0) {
 		int movement = ((int)((GetTickCount64() - start) / ms) % (2 * (difference + time_ticks_wait)));
@@ -777,36 +785,41 @@ void cleanAvoidPath(std::string& s)
 }
 
 
-void sendFileAuto(std::mutex& client_m, bool& die, Sockets::con_client* c, std::vector<std::pair<std::string, short>>& list, bool& working, std::string& syst) {
-	if (!c) { working = false; return; }
-	if (!c->still_on()) { working = false; return; }
+void sendFileAuto(SuperMutex& client_m, bool& die, Sockets::con_client* c, std::vector<std::pair<std::string, short>>& list, bool& working, std::string& syst) {
+	auto giveup = [&](std::string err = "Could not proceed.") {working = false; syst = err; c->considerEmptyPackagesOnDataFlow(true); };
+	if (!c) { giveup(); return; }
+	if (!c->still_on()) { giveup(); return; }
 	FILE* handle = nullptr;
 	LONGLONG filesiz = 1, readden = 0;
 	ULONGLONG latest_perc_upd = 0;
 	auto closeall = [&handle, &syst, &filesiz, &readden]() {if (handle) fclose(handle); filesiz = 1;  readden = 0; };
-	auto msg = [&syst](const std::string s) {syst = "[#" + std::to_string(GetTickCount64() % 10000) + "] " + s; };
-	auto perc = [&](const double d, const int dots = 0, std::string ext = "") {if (GetTickCount64() - latest_perc_upd > 200) { latest_perc_upd = GetTickCount64();  char buff[8]; sprintf_s(buff, "%02.1lf%c%s", d, '%', [&]() {std::string u; for (int k = 0; k < dots; k++) u += '.'; return u; }().c_str()); msg("Sent " + std::string(buff) + ext); }};
+	auto msg = [&syst](const std::string s) {std::string c = std::to_string(GetTickCount64() % 10000); size_t a = c.length(); syst = "[@" + [&]() {std::string k; for (int u = 4; u > a; u--) k += '0'; return k; }() + c + "] " + s; };
+	auto perc = [&](const double d, const int dots = 0, std::string ext = "") {if (GetTickCount64() - latest_perc_upd > 200) { latest_perc_upd = GetTickCount64();  char buff[16]; sprintf_s(buff, "%02.1lf%c%s", d, '%', [&]() {std::string u; for (int k = 0; k < 4; k++) if (k < dots) u += '.'; else u += ' '; return u; }().c_str()); msg("Sent " + std::string(buff) + ext); }};
 
-	client_m.lock();
+	msg("Checking if can actually send file...");
 
-	c->send({"check", static_cast<int>(packages_id::FILE_AVAILABLE)});
-	for (bool gtg = false; !gtg && c->still_on() && !die;)
 	{
-		Sleep(20);
-		if (c->hasPackage()) {
+		//AutoLock al(client_m);
+		client_m.lock();
+		// can receive?
+		//while (c->hasPackage()) { Sockets::final_package p; c->recv(p); } // yeah I know, but this guarantee no mess up ;-;
+
+		c->send({ "check", static_cast<int>(packages_id::FILE_AVAILABLE) });
+
+		while (!c->hasPackage() && c->still_on()) Sleep(20); // wait confirmation
+		{
 			Sockets::final_package pkg;
 			c->recv(pkg);
-			if (pkg.data_type == static_cast<int>(packages_id::FILE_AVAILABLE)) {
-				if (!(gtg = (pkg.variable_data == "yes"))) {
-					msg("Client not ready to receive files!");
-					working = false;
-					client_m.unlock();
-					return;
-				}
-			}
+
+			if (pkg.data_type != static_cast<int>(packages_id::FILE_AVAILABLE)) { client_m.unlock(); giveup(); return; }
+			if (pkg.variable_data != "yes") { client_m.unlock(); giveup("The other side doesn't accept file transfer."); return; }
 		}
 	}
 	client_m.unlock();
+
+	c->considerEmptyPackagesOnDataFlow(false);
+
+	// sending
 
 	working = true;
 
@@ -815,66 +828,121 @@ void sendFileAuto(std::mutex& client_m, bool& die, Sockets::con_client* c, std::
 
 		filesiz = Tools::getFileSize(i.first);
 		auto err = lsw_fopen(handle, i.first.c_str(), "rb");
-		if (filesiz > 0 && err == 0) {
-			c->send({i.first, static_cast<int>(packages_id::FILE_OPEN)});
-			c->send({std::to_string(filesiz), static_cast<int>(packages_id::FILE_SIZE)});
 
-			c->unlockHighestSpeed(true);
+		if (filesiz <= 0 || err) {
+			msg("File '" + i.first + "' was not found. Skipping...");
+			list.erase(list.begin());
+			Sleep(2000);
+			continue;
+		}
 
-			for (bool end = false; !end;) {
-				std::string buf;
-				buf.reserve((1 << 14));
-				readden += lsw_fread(handle, buf, end, (1 << 14)); // 16 kB packs
-				
-				c->send({buf, static_cast<int>(packages_id::FILE_RECEIVING)});
+		double buf_proc = 0.0f;
 
-				perc(readden * 100.0 / filesiz, 0, " with " + std::to_string(list.size()) + " files remaining");
-				i.second = readden * 100.0 / filesiz;
-				if (i.second > 100) i.second = 100;
+		msg("Waiting connection to sync...");
 
-				ULONGLONG timeoutt = GetTickCount64();
+		{
+			client_m.lock();
 
-				while (c->hasSending()) { // free buffer
-					perc(readden * 100.0 / filesiz, (GetTickCount64() / 300) % 4, " pkgs remaining: " + std::to_string(c->hasSending()));
-					Sleep(4);
-					if (GetTickCount64() - timeoutt > 7000) {
+			c->send({ std::to_string(filesiz), static_cast<int>(packages_id::FILE_SIZE) }); // FIRST!
+			c->send({ i.first, static_cast<int>(packages_id::FILE_OPEN) });
+
+			while (!c->hasPackage() && c->still_on()) Sleep(20); // wait confirmation
+
+			Sockets::final_package pkg;
+			c->recv(pkg);
+
+			client_m.unlock();
+
+			if (pkg.data_type != static_cast<int>(packages_id::FILE_OPEN)) {
+				msg("Failed to sync file. Trying again...");
+				Sleep(2000);
+				continue;
+			}
+
+		}
+
+		c->setSpeed(Sockets::internet_way::UPLOAD, 0);
+
+		size_t once_buf_full = 0;
+
+		for (bool end = false; !end;) {
+
+			/*if (c->hasPackage()) {
+				Sockets::final_package pkg;
+				c->recv(pkg);
+				if (pkg.data_type == static_cast<int>(packages_id::FILE_CLOSE))
+				{
+					msg("Lost connection.");
+					end = true;
+					if (handle) fclose(handle);
+					handle = nullptr;
+					continue;
+				}
+			}*/
+
+			auto sending_pending = c->hasSending();
+
+			if (sending_pending < 40)
+			{
+				string_sized buf;
+				readden += lsw_fread(handle, buf, end, (Sockets::default_package_size << 1)); //  16 kB/tick
+				//readden += Sockets::default_package_size; // TEST
+				//c->send({ buf, static_cast<int>(packages_id::FILE_RECEIVING) }); // maybe it's null
+				c->send({ buf.data(), buf.size(), static_cast<int>(packages_id::FILE_RECEIVING) }); // maybe it's null
+				if (once_buf_full) once_buf_full--;
+			}
+			else {
+				ULONGLONG timeoutt = GetTickCount64() + static_cast<ULONGLONG>(10e3);
+				while (c->hasSending() >= 10 && !end) {
+					if (GetTickCount64() > timeoutt) {
+						if (once_buf_full < 10) once_buf_full++;
+#ifndef IGNORE_TIMEOUT
 						msg("Lost connection.");
 						end = true;
-						fclose(handle);
+						if (handle) fclose(handle);
 						handle = nullptr;
+						continue;
+#else
+						msg("Lost connection? Keeping it up.");
+#endif
 					}
 				}
 			}
-			if (handle) {
-				msg("Sent file successfully.");
-				c->send({ "end", static_cast<int>(packages_id::FILE_CLOSE) });
-				fclose(handle);
-			}
 
-			c->unlockHighestSpeed(false);
+			buf_proc = ((buf_proc * 29.0) + 1.0 * (sending_pending * 100 / 10)) / 30.0;
+
+			perc(readden * 100.0 / filesiz, (GetTickCount64() / 300) % 4, ", b=" + std::to_string(static_cast<int>(once_buf_full > 0 ? 101 : buf_proc)) + "% f=" + std::to_string(list.size()));
 		}
-		else {
-			msg("File '" + i.first + "' was not found. Skipping...");
-			Sleep(2000);
+
+		c->setSpeed(Sockets::internet_way::UPLOAD);
+
+		if (handle) {
+			msg("Sent file successfully.");
+			c->send({ "end", static_cast<int>(packages_id::FILE_CLOSE) });
+			fclose(handle);
 		}
+
 		list.erase(list.begin());
 	}
+	c->considerEmptyPackagesOnDataFlow(true);
 	working = false;
 	syst.clear();
 }
 
-void handlePackages(std::mutex& client_m, bool& die, Sockets::con_client* c, bool& receive, std::vector<Sockets::final_package>& messages, std::string& syst) {
+void handlePackages(SuperMutex& client_m, bool& die, Sockets::con_client* c, bool& receive, std::vector<Sockets::final_package>& messages, std::string& syst) {
 	if (!c) return;
 	if (!c->still_on()) return;
 	FILE* handle = nullptr;
 	LONGLONG filesiz = 1, written = 0;
 	ULONGLONG latest_perc_upd = 0;
-	auto closeall = [&handle, &syst, &filesiz, &written]() {if (handle) fclose(handle); filesiz = 1;  written = 0; };
-	auto msg = [&syst](const std::string s) {syst = "[#" + std::to_string(GetTickCount64() % 10000) + "] " + s; };
-	auto perc = [&](const double d) {if (GetTickCount64() - latest_perc_upd > 200) { latest_perc_upd = GetTickCount64();  char buff[8]; sprintf_s(buff, "%02.1lf%c", d, '%'); msg("Received " + std::string(buff)); }};
-	bool last_was_receive = false;
 
-	msg("OK");
+	auto closeall = [&handle, &syst, &filesiz, &written]() {if (handle) fclose(handle); filesiz = 1;  written = 0; };
+	auto msg = [&syst](const std::string s) {std::string c = std::to_string(GetTickCount64() % 10000); size_t a = c.length(); syst = "[#" + [&]() {std::string k; for (int u = 4; u > a; u--) k += '0'; return k; }() + c + "] " + s; };
+	auto perc = [&](const double d) {if (GetTickCount64() - latest_perc_upd > 200) { latest_perc_upd = GetTickCount64();  char buff[8]; sprintf_s(buff, "%02.1lf%c", (d > 100.0 ? 100.0 : (d < 0.0 ? 0.0 : d)), '%'); msg("Received " + std::string(buff)); }};
+	
+	//bool last_was_receive = false;
+
+	msg("Waiting for event...");
 
 	while (!die) {
 		if (!c->still_on()) {
@@ -883,59 +951,166 @@ void handlePackages(std::mutex& client_m, bool& die, Sockets::con_client* c, boo
 			return;
 		}
 
+		Sockets::final_package pkg;
+
+		//std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
 		client_m.lock();
 
-		if (c->hasPackage()) {
-			last_was_receive = false;
-			Sockets::final_package pkg;
-			c->recv(pkg);
+		if (c->recv(pkg)) {
 
 			switch (pkg.data_type) {
+
 			case static_cast<int>(packages_id::MESSAGE):
+				msg("Got message.");
 				messages.push_back(pkg);
 				break;
+
 			case static_cast<int>(packages_id::FILE_AVAILABLE):
+				msg((receive ? "Possible file transfer incoming..." : "Blocked file transfer ('rf')"));
 				c->send({(receive ? "yes" : "no"), static_cast<int>(packages_id::FILE_AVAILABLE)});
 				break;
-			case static_cast<int>(packages_id::FILE_OPEN):
-			{
-				closeall();
-				cleanAvoidPath(pkg.variable_data);
-				auto err = lsw_fopen(handle, pkg.variable_data.c_str(), "wb");
-				if (err) {
-					msg("Failed opening file to receive transfer!");
-					handle = nullptr;
-				}
-			}
-				break;
+
+				// TRANSFER PART:
+
 			case static_cast<int>(packages_id::FILE_SIZE):
+				filesiz = 0;
 				filesiz = atoll(pkg.variable_data.c_str());
-				if (filesiz != 0) {
-					msg("File size got! " + std::to_string(filesiz) + " bytes.");
-				}
-				else filesiz = 1;
-				break;
-			case static_cast<int>(packages_id::FILE_RECEIVING):
-				last_was_receive = true;
-				if (handle) {
-					c->unlockHighestSpeed(true);
-					written += lsw_fwrite(pkg.variable_data, handle);
-					perc(written * 100.0 / filesiz);
-				}
-				else {
-					msg("Received data, but no file to save! Skipping...");
-				}
-				break;
-				case static_cast<int>(packages_id::FILE_CLOSE):
-					closeall();
-					msg("File received successfully.");
-					c->unlockHighestSpeed(false);
 				break;
 
+			case static_cast<int>(packages_id::FILE_OPEN):
+				{
+					if (handle) fclose(handle);
+
+					cleanAvoidPath(pkg.variable_data);
+					auto err = lsw_fopen(handle, pkg.variable_data.c_str(), "wb");
+					if (err || !handle) {
+						msg("Failed opening file to receive transfer!");
+						c->send({ "notgood", static_cast<int>(packages_id::FILE_CLOSE) });
+						handle = nullptr;
+						client_m.unlock();
+						c->considerEmptyPackagesOnDataFlow(true);
+						c->setSpeed(Sockets::internet_way::DOWNLOAD);
+						continue;
+					}
+					else {
+						msg("Opened file for transfer!");
+						c->considerEmptyPackagesOnDataFlow(false);
+						c->setSpeed(Sockets::internet_way::DOWNLOAD, 0);
+						c->send({ "good", static_cast<int>(packages_id::FILE_OPEN) });
+					}
+				}
+				break;
+
+			/*case static_cast<int>(packages_id::FILE_SIZE) : // HAS TO BE FIRST
+				filesiz = 0;
+				filesiz = atoll(pkg.variable_data.c_str());
+				if (filesiz > 0) {
+					c->considerEmptyPackagesOnDataFlow(false);
+
+					msg("File size to transfer received: " + std::to_string(filesiz) + " bytes.");
+
+					for (ULONGLONG t = GetTickCount64() + static_cast<ULONGLONG>(10e3); GetTickCount64() < t && !c->hasPackage();) Sleep(10);
+
+					if (!c->hasPackage()) { // discard file size, took too long
+#ifndef IGNORE_TIMEOUT
+						c->send({ "timeout", static_cast<int>(packages_id::FILE_CLOSE) });
+						msg("Failed to receive file. Reason: Timeout");
+						client_m.unlock();
+						c->considerEmptyPackagesOnDataFlow(true);
+						continue;
+#else
+						msg("Timeout? Keeping up.");
+						while (!c->hasPackage() && c->still_on()) Sleep(20);
+#endif
+					}
+					c->recv(pkg);
+
+					if (pkg.data_type != static_cast<int>(packages_id::FILE_OPEN)) {
+						c->send({ "wrong", static_cast<int>(packages_id::FILE_CLOSE) });
+						msg("Failed to receive file. Reason: Corrupted data");
+						client_m.unlock();
+						c->considerEmptyPackagesOnDataFlow(true);
+						continue;
+					}
+
+					if (handle) fclose(handle);
+
+
+					cleanAvoidPath(pkg.variable_data);
+					auto err = lsw_fopen(handle, pkg.variable_data.c_str(), "wb");
+					if (err || !handle) {
+						msg("Failed opening file to receive transfer!");
+						c->send({ "noopen", static_cast<int>(packages_id::FILE_CLOSE) });
+						handle = nullptr;
+						client_m.unlock();
+						c->considerEmptyPackagesOnDataFlow(true);
+						continue;
+					}
+
+					msg("Opened file for transfer!");
+
+					c->send({ "good", static_cast<int>(packages_id::FILE_OPEN) });
+
+					msg("Ready to receive data!");
+
+					bool end_success = true;
+
+					c->setSpeed(Sockets::internet_way::DOWNLOAD, 0);
+					ULONGLONG t = GetTickCount64() + static_cast<ULONGLONG>(10e3);
+					pkg = Sockets::final_package();
+
+					do {
+						if (GetTickCount64() > t) {
+#ifndef IGNORE_TIMEOUT
+							pkg.data_type = static_cast<int>(packages_id::FILE_CLOSE);
+							end_success = false;
+							c->send({ "timeout", static_cast<int>(packages_id::FILE_CLOSE) });
+							msg("Failed to receive file. Reason: Timeout");
+							c->considerEmptyPackagesOnDataFlow(true);
+							break;
+#else
+							msg("This is taking some time... P=" + std::to_string(pkg.data_type) + ";S=" + std::to_string(pkg.variable_data.size()));
+#endif
+						}
+							
+						if (c->recv(pkg)) {
+							//msg("Has package!");
+							if (pkg.data_type == static_cast<int>(packages_id::FILE_RECEIVING)) {
+								written += lsw_fwrite(handle, pkg.variable_data);
+								//written += Sockets::default_package_size; // TEST
+								if (filesiz) perc(written * 100.0 / filesiz);
+								else msg("Receiving " + std::to_string(written) + " byte(s)...");
+								t = GetTickCount64() + static_cast<ULONGLONG>(10e3);
+							}
+						}
+					} while (pkg.data_type != static_cast<int>(packages_id::FILE_CLOSE));
+
+					c->setSpeed(Sockets::internet_way::DOWNLOAD);
+
+					closeall();
+					c->considerEmptyPackagesOnDataFlow(true);
+				}
+				else filesiz = 1;
+				break;*/
+			case static_cast<int>(packages_id::FILE_RECEIVING):
+				{
+					written += lsw_fwrite(handle, pkg.variable_data);
+					if (filesiz > 0) perc(written * 100.0 / filesiz);
+					else msg("Receiving " + std::to_string(written) + " byte(s)...");
+					//t = GetTickCount64() + static_cast<ULONGLONG>(10e3);
+				}
+				break;
+			case static_cast<int>(packages_id::FILE_CLOSE):
+				closeall();
+				msg("File saved successfully.");
+				c->setSpeed(Sockets::internet_way::DOWNLOAD);
+				c->considerEmptyPackagesOnDataFlow(true);
+				break;
 			}
 		}
 		client_m.unlock();
-		if (!last_was_receive) Sleep(20);
+		//if (!last_was_receive) Sleep(20);
 	}
 	syst.clear();
 }

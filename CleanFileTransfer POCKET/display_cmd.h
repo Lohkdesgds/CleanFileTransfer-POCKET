@@ -113,8 +113,8 @@ namespace Custom {
 	inline void DISPLAY<X, Y>::_setTitle(const std::string str)
 	{
 		for (size_t p = 0; p < X; p++) {
-			if (p < str.length()) setAt(p, 1, str[p]);
-			else setAt(p, 1, ' ');
+			if (p < str.length()) setAt(static_cast<int>(p), 1, str[p]);
+			else setAt(static_cast<int>(p), 1, ' ');
 		}
 	}
 
@@ -123,8 +123,8 @@ namespace Custom {
 	{
 		if (line_c < line_count && line_c >= 0) {
 			for (size_t p = 0; p < X; p++) {
-				if (p < str.length()) setAt(p, line_c + 3, str[p]);
-				else setAt(p, line_c + 3, ' ');
+				if (p < str.length()) setAt(static_cast<int>(p), line_c + 3, str[p]);
+				else setAt(static_cast<int>(p), line_c + 3, ' ');
 			}
 		}
 	}
@@ -166,7 +166,7 @@ namespace Custom {
 	{
 		m.lock();
 		for (int p = 2; p < static_cast<int>(X); p++) {
-			if (p - 2 < str.length()) setAt(p, Y - 5, str[p - 2]);
+			if (static_cast<size_t>(p) - 2 < str.length()) setAt(p, Y - 5, str[static_cast<size_t>(p) - 2]);
 			else setAt(p, Y - 5, ' ');
 		}
 		m.unlock();
@@ -226,7 +226,7 @@ namespace Custom {
 			auto& i = line_f[lc];
 			if (i) {
 				std::string ll = i();
-				_printAt(lc, ll);
+				_printAt(static_cast<int>(lc), ll);
 			}
 		}
 
@@ -260,8 +260,8 @@ namespace Custom {
 			}
 		}
 		for (size_t p = 0; p < X; p++) {
-			if (p < str.length()) setAt(p, Y - 1, str[p]);
-			else setAt(p, Y - 1, ' ');
+			if (p < str.length()) setAt(static_cast<int>(p), static_cast<int>(Y) - 1, str[p]);
+			else setAt(static_cast<int>(p), Y - 1, ' ');
 		}
 		m.unlock();
 
