@@ -150,6 +150,7 @@
     <ClCompile Include="filesystem\filesystem.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="socketsystem\socketsystem.cpp" />
+    <ClCompile Include="supermutex\supermutex.cpp" />
     <ClCompile Include="tools\tools.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -158,7 +159,14 @@
     <ClInclude Include="filesystem\filesystem.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="socketsystem\socketsystem.h" />
+    <ClInclude Include="supermutex\supermutex.h" />
     <ClInclude Include="tools\tools.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="icon.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="CleanFileTransfer POCKET.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
