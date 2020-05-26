@@ -11,17 +11,22 @@
 #include "filesystem/filesystem.h"
 #include "display_cmd.h"
 
-#ifdef _DEBUG
+//#define LSW_DEBUG
+
+#ifdef LSW_DEBUG
 #define IGNORE_TIMEOUT
 #endif
 
+#ifdef LSW_DEBUG
+#define DEBUG_LINES 8
+#endif
 
 using namespace LSW::v5;
 
-const std::string version_app = "CleanFileTransfer POCKET beta 0.5b";
+const std::string version_app = "CleanFileTransfer POCKET beta 0.6b";
 const std::string discord_link = std::string("ht") + std::string("tps://discord.gg/a5G") + "GgBt";
 
-enum class packages_id {VERSION_CHECK=1, MESSAGE, PASSWORD_CHECK, FILE_AVAILABLE, FILE_RECEIVING, FILE_SIZE, FILE_OPEN, FILE_CLOSE};
+enum class packages_id {VERSION_CHECK=1, MESSAGE, MESSAGE_SENT, PASSWORD_CHECK, FILE_AVAILABLE, FILE_RECEIVING, FILE_SIZE, FILE_OPEN, FILE_CLOSE};
 
 
 struct user_input {
@@ -39,7 +44,7 @@ struct user_input {
 void input_handler(user_input&);
 
 // display to update
-void update_display(Custom::DISPLAY<100, 24>&, bool&);
+void update_display(Custom::DISPLAY<100, 30>&, bool&);
 
 // text, limit, time to bounce, specific time to set as init, how many ticks each end
 std::string shrinkText(std::string, const size_t, const ULONGLONG, const ULONGLONG = 0, const size_t = 10);
@@ -47,10 +52,10 @@ std::string shrinkText(std::string, const size_t, const ULONGLONG, const ULONGLO
 // replaces "/" to "$", "\\" to "%" and ":" to "-"
 void cleanAvoidPath(std::string&);
 
-// Automatically sends a file through the con_client. Mutex guarantee package read, Bool is for "kill" if needed, second bool is to tell you if it is working on something
-void sendFileAuto(SuperMutex&, bool&, Sockets::con_client*, std::vector<std::pair<std::string, short>>&, bool&, std::string&);
-// Handles packages. It will save messages on the vector. Mutex guarantee package read, First bool is "kill". Files are saved if second bool is true, else discarded. It dies automatically if connection dies too. Last std::string is for messages from "system"
-void handlePackages(SuperMutex&, bool&, Sockets::con_client*, bool&, std::vector<Sockets::final_package>&, std::string&);
+// Automatically sends a file through the con_client. bool for message_sent, Mutex guarantee package read, Bool is for "kill" if needed, second bool is to tell you if it is working on something
+void sendFileAuto(bool&, SuperMutex&, bool&, Sockets::con_client*, std::vector<std::pair<std::string, short>>&, bool&, std::string&);
+// Handles packages. It will save messages on the vector. bool for message_sent, Mutex guarantee package read, First bool is "kill". Files are saved if second bool is true, else discarded. It dies automatically if connection dies too. Last std::string is for messages from "system"
+void handlePackages(bool&, SuperMutex&, bool&, Sockets::con_client*, bool&, std::vector<Sockets::final_package>&, std::string&);
 
 
 int main() {
@@ -60,17 +65,22 @@ int main() {
 	Custom::disableEcho(true);
 
 	user_input input;
-	Custom::DISPLAY<100, 24> display;
+	Custom::DISPLAY<100, 30> display;
 	Sockets::con_host* host = nullptr;
 	Sockets::con_client* client = nullptr;
 	std::vector<std::pair<std::string,short>> items_list;
 	bool sending = false;
+	bool message_sent = false;
 	std::vector<Sockets::final_package> packages_coming;
 	bool is_file_transfer_enabled = false;
 	std::string system_message;
 	std::string internal_message;
 	SuperMutex transf_m;
 
+#ifdef LSW_DEBUG
+	std::string lines_log[DEBUG_LINES];
+	auto log_last = [&](std::string a = "") {if (a.length() > 0) { for (int u = DEBUG_LINES - 1; u > 0; u--) lines_log[u] = lines_log[u - 1]; lines_log[0] = a; } for (size_t u = 0; u < DEBUG_LINES; u++) display.printAt(display.getLineAmount() - u - 1, lines_log[u]); };
+#endif
 
 	std::thread thr_input([&]() { input_handler(input); });
 	std::thread thr_autorefresh([&]() { update_display(display, input.die); });
@@ -87,13 +97,13 @@ int main() {
 		if (host) {
 			size_t connected = 0;
 			for (auto& i : *host) {
-				connected += i->still_on();
+				connected += i->isConnected();
 			}
 			buf += "| C/T: " + std::to_string(connected) + "/" + std::to_string(host->size());
 		}
 		if (client) {
 			buf += "| C ";
-			if (client->still_on()) buf += "ON";
+			if (client->isConnected()) buf += "ON";
 			else buf += "OFF";
 		}
 		buf += " | Items: " + std::to_string(items_list.size());
@@ -107,27 +117,11 @@ int main() {
 	std::string last_input = "";
 
 	for (bool dead = false; !dead;) {
+#ifdef LSW_DEBUG
+		log_last();
+#endif
+
 		Sleep(150);
-
-		/*if (host || client) {
-			Sockets::con_client* i = client;
-			if (host) {
-				if (host->size() > 0) {
-					i = *host->begin();
-				}
-			}
-
-			if (i) {
-				if (i->hasPackage()) {
-					Sockets::final_package pkg;
-					i->recv(pkg);
-					if (pkg.data_type == static_cast<int>(packages_id::MESSAGE)) {
-						display.newMessage("[Them -> You] " + pkg.variable_data);
-					}
-					else packages_coming.push_back(pkg);
-				}
-			}
-		}*/
 
 		if (packages_coming.size() > 0) {
 			Sockets::final_package& pkg = packages_coming[0];
@@ -293,36 +287,47 @@ int main() {
 						if (host) {
 							host->setMaxConnections(1);
 							for (auto& i : *host) {
-								i->kill_connection();
+								i->kill();
 							}				
 						}
 						else {
-							host = new Sockets::con_host(ipv6);
+							host = Tools::new_guaranteed<Sockets::con_host>(ipv6);
 							host->setMaxConnections(1);
 						}
-
-						bool cancel = false;
 
 						input.clsInput();
 						display.setCommandEntry("");
 
 						display.printAt(line++, "Waiting for new connection... (type anything to stop and cancel or wait 120 sec)");
 
-						auto timeout = GetTickCount64() + 120e3; // 60 sec
-						auto timedout_f = [&]()->bool {return (cancel |= ((GetTickCount64() > timeout) || (input.copyInput().length() != 0))); };
+						Sockets::con_client* i = nullptr;
 
-						while (host->size() == 0 && !timedout_f()) Sleep(50);							
+						for (size_t u = 0; u < 120 && !i; u++) {
+							if (input.copyInput().length() > 0) {
+								display.printAt(line++, "Got input, end...");
+								host->setMaxConnections(0);
+								for (auto& i : *host) i->kill();
+								break;
+							}
+							i = host->waitNewConnection(1000);
+						}
 
-						if (!cancel) {
-							auto& i = *host->begin();
-							i->hookPrint([&](std::string nm) { internal_message = nm; });
+						if (i) {
+							display.printAt(line++, "Connected!");
+
+							i->hookPrintBandwidth([&](std::string nm) { internal_message = nm; });
+#ifdef LSW_DEBUG
+							i->hookPrintEvent([&](std::string ev) {log_last(ev); });
+#endif
 
 							i->send({ version_app, static_cast<int>(packages_id::VERSION_CHECK) });
 
 							Sockets::final_package pkg1, pkg2;
 
-							while (!i->recv(pkg1) && i->still_on()) Sleep(20); // should be version
-							while (!i->recv(pkg2) && i->still_on()) Sleep(20); // should be password
+							display.printAt(line++, "Verifying version and password...");
+
+							i->recv(pkg1); // should be version
+							i->recv(pkg2); // should be password
 							{
 								bool failed = false;
 								if (failed |= (pkg1.data_type != static_cast<int>(packages_id::VERSION_CHECK))) {
@@ -332,7 +337,7 @@ int main() {
 									display.printAt(line++, "The package ordering was not right... Password could not be verified.");
 								}
 								if (failed) {
-									i->kill_connection();
+									i->kill();
 									input.clsInput();
 									display.setCommandEntry("");
 									continue;
@@ -343,7 +348,7 @@ int main() {
 
 							if (pkg1.variable_data != version_app) {
 								display.printAt(line++, "Version not supported!");
-								i->kill_connection();
+								i->kill();
 								input.clsInput();
 								display.setCommandEntry("");
 								continue;
@@ -358,7 +363,7 @@ int main() {
 							}
 							else {
 								display.printAt(line++, "Password failed!");
-								i->kill_connection();
+								i->kill();
 								input.clsInput();
 								display.setCommandEntry("");
 								continue;
@@ -369,12 +374,12 @@ int main() {
 								thr_handle_packages->join();
 								delete thr_handle_packages;
 							}
-							thr_handle_packages = new std::thread([&, i]() {handlePackages(transf_m, input.die, i, is_file_transfer_enabled, packages_coming, system_message); }); // if not connected, die.
+							thr_handle_packages = Tools::new_guaranteed<std::thread>([&, i]() {handlePackages(message_sent, transf_m, input.die, i, is_file_transfer_enabled, packages_coming, system_message); }); // if not connected, die.
 
 							display.printAt(line++, "[!] Up and running!");
 						}
 
-						if (cancel) {
+						else {
 							host->setMaxConnections(0);
 							display.printAt(line++, "Time out or user input! Not accepting connections anymore.");
 							input.clsInput();
@@ -401,7 +406,7 @@ int main() {
 
 						if (client) {
 							display.printAt(line++, "Detected a connection already in memory, cleaning up...");
-							client->kill_connection();
+							client->kill();
 							display.printAt(line++, "Ready, trying to connect...");
 							delete client;
 						}
@@ -412,8 +417,11 @@ int main() {
 							host = nullptr;
 						}
 
-						client = new Sockets::con_client();
-						client->hookPrint([&](std::string nm) {internal_message = nm; });
+						client = Tools::new_guaranteed<Sockets::con_client>();
+						client->hookPrintBandwidth([&](std::string nm) {internal_message = nm; });
+#ifdef LSW_DEBUG
+						client->hookPrintEvent([&](std::string ev) {log_last(ev); });
+#endif
 
 						auto timeout = GetTickCount64() + 10e3; // 60 sec
 						auto timedout_f = [&timeout]()->bool {return GetTickCount64() > timeout; };
@@ -424,12 +432,12 @@ int main() {
 							int rnd = GetTickCount64() % 1000 + 2000;
 
 							client->send({ version_app, static_cast<int>(packages_id::VERSION_CHECK) });
-							client->send({ std::to_string(rnd) + pw, 3 });
+							client->send({ std::to_string(rnd) + pw, static_cast<int>(packages_id::PASSWORD_CHECK) });
 
 							Sockets::final_package pkg1, pkg2;
 
-							while (!client->recv(pkg1) && client->still_on()) Sleep(20); // should be version
-							while (!client->recv(pkg2) && client->still_on()) Sleep(20); // should be password
+							client->recv(pkg1); // should be version
+							client->recv(pkg2); // should be password
 							{
 								bool failed = false;
 								if (failed |= (pkg1.data_type != static_cast<int>(packages_id::VERSION_CHECK))) {
@@ -439,7 +447,7 @@ int main() {
 									display.printAt(line++, "The package ordering was not right... Password could not be verified.");
 								}
 								if (failed){
-									client->kill_connection();
+									client->kill();
 									input.clsInput();
 									display.setCommandEntry("");
 									continue;
@@ -450,7 +458,7 @@ int main() {
 
 							if (pkg1.variable_data != version_app) {
 								display.printAt(line++, "Version not supported!");
-								client->kill_connection();
+								client->kill();
 								input.clsInput();
 								display.setCommandEntry("");
 								continue;
@@ -463,7 +471,7 @@ int main() {
 							}
 							else {
 								display.printAt(line++, "Password failed!");
-								client->kill_connection();
+								client->kill();
 								input.clsInput();
 								display.setCommandEntry("");
 								continue;
@@ -474,13 +482,13 @@ int main() {
 								thr_handle_packages->join();
 								delete thr_handle_packages;
 							}
-							thr_handle_packages = new std::thread([&, client]() {handlePackages(transf_m, input.die, client, is_file_transfer_enabled, packages_coming, system_message); }); // if not connected, die.
+							thr_handle_packages = Tools::new_guaranteed<std::thread>([&, client]() {handlePackages(message_sent, transf_m, input.die, client, is_file_transfer_enabled, packages_coming, system_message); }); // if not connected, die.
 
 							display.printAt(line++, "[!] Up and running!");
 						}
 						else {
 							display.printAt(line++, "Failed to connect!");
-							client->kill_connection();
+							client->kill();
 							input.clsInput();
 							display.setCommandEntry("");
 						}
@@ -610,7 +618,7 @@ int main() {
 						}
 						display.printAt(line++, "Initializing thread to send...");
 
-						thr_autosend_packages = new std::thread([&]() {sendFileAuto(transf_m, input.die, (host ? *host->begin() : client), items_list, sending, system_message); });
+						thr_autosend_packages = Tools::new_guaranteed<std::thread>([&]() {sendFileAuto(message_sent, transf_m, input.die, (host ? *host->begin() : client), items_list, sending, system_message); });
 
 						display.printAt(line++, "Sending files!");
 					}
@@ -631,7 +639,7 @@ int main() {
 						{
 							display.printAt(1, "You are not connected!");
 						}
-						else if (!the_client->still_on()) {
+						else if (!the_client->isConnected()) {
 							display.printAt(1, "Sorry, but the connection got down!");
 						}
 						else {
@@ -641,10 +649,14 @@ int main() {
 							}
 							if (to_send.length() > 0) to_send.pop_back();
 
-							the_client->send(Sockets::final_package{ to_send, 2 });
+							message_sent = false;
+							the_client->send(Sockets::final_package{ to_send, static_cast<int>(packages_id::MESSAGE) });
+							Sockets::final_package pkg;
+							display.printAt(1, "Sending message...");
+							while (!message_sent) std::this_thread::sleep_for(std::chrono::milliseconds(70)); // whoever is running shall change message_sent to true if MESSAGE_SENT is got to ensure send
 
-							if (GetTickCount64()/1000 < 20) display.printAt(1, "Voosh!");
-							else display.printAt(1, "Sent!");
+							if (GetTickCount64()/1000 < 20) display.printAt(2, "Voosh!");
+							else display.printAt(2, "Sent!");
 
 							display.newMessage("[You -> Them] " + to_send);
 						}
@@ -749,7 +761,7 @@ void input_handler(user_input& in) {
 		while (in.hasbreak && !in.die);
 	}
 }
-void update_display(Custom::DISPLAY<100, 24>& d, bool& die) {
+void update_display(Custom::DISPLAY<100, 30>& d, bool& die) {
 	while (!die) {
 		d.flip();
 		Sleep(20);
@@ -785,158 +797,127 @@ void cleanAvoidPath(std::string& s)
 }
 
 
-void sendFileAuto(SuperMutex& client_m, bool& die, Sockets::con_client* c, std::vector<std::pair<std::string, short>>& list, bool& working, std::string& syst) {
-	auto giveup = [&](std::string err = "Could not proceed.") {working = false; syst = err; c->considerEmptyPackagesOnDataFlow(true); };
+void sendFileAuto(bool& message_sent, SuperMutex& client_m, bool& die, Sockets::con_client* c, std::vector<std::pair<std::string, short>>& list, bool& working, std::string& syst) {
+	auto giveup = [&](std::string err = "Could not proceed.") {working = false; syst = err; };
 	if (!c) { giveup(); return; }
-	if (!c->still_on()) { giveup(); return; }
-	FILE* handle = nullptr;
-	LONGLONG filesiz = 1, readden = 0;
+	if (!c->isConnected()) { giveup(); return; }
 	ULONGLONG latest_perc_upd = 0;
-	auto closeall = [&handle, &syst, &filesiz, &readden]() {if (handle) fclose(handle); filesiz = 1;  readden = 0; };
+	//auto closeall = [/*&handle,*/ &syst, &filesiz, &readden]() {/*handle.close();*/ filesiz = 1;  readden = 0; };
 	auto msg = [&syst](const std::string s) {std::string c = std::to_string(GetTickCount64() % 10000); size_t a = c.length(); syst = "[@" + [&]() {std::string k; for (int u = 4; u > a; u--) k += '0'; return k; }() + c + "] " + s; };
 	auto perc = [&](const double d, const int dots = 0, std::string ext = "") {if (GetTickCount64() - latest_perc_upd > 200) { latest_perc_upd = GetTickCount64();  char buff[16]; sprintf_s(buff, "%02.1lf%c%s", d, '%', [&]() {std::string u; for (int k = 0; k < 4; k++) if (k < dots) u += '.'; else u += ' '; return u; }().c_str()); msg("Sent " + std::string(buff) + ext); }};
 
 	msg("Checking if can actually send file...");
 
-	{
-		//AutoLock al(client_m);
-		client_m.lock();
-		// can receive?
-		//while (c->hasPackage()) { Sockets::final_package p; c->recv(p); } // yeah I know, but this guarantee no mess up ;-;
+	//AutoLock al(client_m);
+	client_m.lock();
+	// can receive?
+	//while (c->hasPackage()) { Sockets::final_package p; c->recv(p); } // yeah I know, but this guarantee no mess up ;-;
 
-		c->send({ "check", static_cast<int>(packages_id::FILE_AVAILABLE) });
+	c->send({ "check", static_cast<int>(packages_id::FILE_AVAILABLE) });
 
-		while (!c->hasPackage() && c->still_on()) Sleep(20); // wait confirmation
-		{
-			Sockets::final_package pkg;
-			c->recv(pkg);
+	Sockets::final_package pkg;
+	c->recv(pkg);
 
-			if (pkg.data_type != static_cast<int>(packages_id::FILE_AVAILABLE)) { client_m.unlock(); giveup(); return; }
-			if (pkg.variable_data != "yes") { client_m.unlock(); giveup("The other side doesn't accept file transfer."); return; }
-		}
-	}
+	if (pkg.data_type != static_cast<int>(packages_id::FILE_AVAILABLE)) { client_m.unlock(); giveup(); return; }
+	if (pkg.variable_data != "yes") { client_m.unlock(); giveup("The other side doesn't accept file transfer."); return; }
+
 	client_m.unlock();
 
-	c->considerEmptyPackagesOnDataFlow(false);
 
 	// sending
 
 	working = true;
 
-	while (!die && list.size() > 0 && c->still_on()) {
-		auto& i = list[0];
+	// 1 skip/clean, 0 try again, -1 return
+	auto handle_pack = [&](std::pair<std::string, short>& i)->int{
 
-		filesiz = Tools::getFileSize(i.first);
-		auto err = lsw_fopen(handle, i.first.c_str(), "rb");
+		SmartFILE handle;
+		long long filesiz = Tools::getFileSize(i.first);
+		long long readden = 0;
 
-		if (filesiz <= 0 || err) {
+		if (!handle.open(i.first.c_str(), file_modes::READ)) {
 			msg("File '" + i.first + "' was not found. Skipping...");
-			list.erase(list.begin());
-			Sleep(2000);
-			continue;
+			std::this_thread::sleep_for(std::chrono::seconds(2));
+			return 1;
 		}
-
-		double buf_proc = 0.0f;
 
 		msg("Waiting connection to sync...");
+		client_m.lock();
 
-		{
-			client_m.lock();
+		c->send({ std::to_string(filesiz), static_cast<int>(packages_id::FILE_SIZE) }); // FIRST!
+		c->send({ i.first, static_cast<int>(packages_id::FILE_OPEN) });
 
-			c->send({ std::to_string(filesiz), static_cast<int>(packages_id::FILE_SIZE) }); // FIRST!
-			c->send({ i.first, static_cast<int>(packages_id::FILE_OPEN) });
-
-			while (!c->hasPackage() && c->still_on()) Sleep(20); // wait confirmation
-
-			Sockets::final_package pkg;
+		Sockets::final_package pkg;
+		do {
 			c->recv(pkg);
+			message_sent |= (pkg.data_type == static_cast<int>(packages_id::MESSAGE_SENT));
+		} while (pkg.data_type == static_cast<int>(packages_id::MESSAGE_SENT));
 
-			client_m.unlock();
+		client_m.unlock();
 
-			if (pkg.data_type != static_cast<int>(packages_id::FILE_OPEN)) {
-				msg("Failed to sync file. Trying again...");
-				Sleep(2000);
-				continue;
-			}
-
+		if (pkg.data_type != static_cast<int>(packages_id::FILE_OPEN)) {
+			msg("Failed to sync file. Trying again...");
+			std::this_thread::sleep_for(std::chrono::seconds(2));
+			return 0;
 		}
-
-		c->setSpeed(Sockets::internet_way::UPLOAD, 0);
-
-		size_t once_buf_full = 0;
 
 		for (bool end = false; !end;) {
 
-			/*if (c->hasPackage()) {
-				Sockets::final_package pkg;
-				c->recv(pkg);
-				if (pkg.data_type == static_cast<int>(packages_id::FILE_CLOSE))
-				{
-					msg("Lost connection.");
-					end = true;
-					if (handle) fclose(handle);
-					handle = nullptr;
-					continue;
-				}
-			}*/
-
-			auto sending_pending = c->hasSending();
-
-			if (sending_pending < 40)
+			if (c->isConnected())
 			{
 				string_sized buf;
-				readden += lsw_fread(handle, buf, end, (Sockets::default_package_size << 1)); //  16 kB/tick
-				//readden += Sockets::default_package_size; // TEST
-				//c->send({ buf, static_cast<int>(packages_id::FILE_RECEIVING) }); // maybe it's null
+
+				if (handle.eof()) {
+					end = true;
+					continue;
+				}
+
+				readden += handle.read(buf, (Sockets::default_package_size << 1));; //  16 kB/tick
 				c->send({ buf.data(), buf.size(), static_cast<int>(packages_id::FILE_RECEIVING) }); // maybe it's null
-				if (once_buf_full) once_buf_full--;
 			}
 			else {
-				ULONGLONG timeoutt = GetTickCount64() + static_cast<ULONGLONG>(10e3);
-				while (c->hasSending() >= 10 && !end) {
-					if (GetTickCount64() > timeoutt) {
-						if (once_buf_full < 10) once_buf_full++;
-#ifndef IGNORE_TIMEOUT
-						msg("Lost connection.");
-						end = true;
-						if (handle) fclose(handle);
-						handle = nullptr;
-						continue;
-#else
-						msg("Lost connection? Keeping it up.");
-#endif
-					}
-				}
+				msg("Lost connection.");
+				return -1;
 			}
 
-			buf_proc = ((buf_proc * 29.0) + 1.0 * (sending_pending * 100 / 10)) / 30.0;
-
-			perc(readden * 100.0 / filesiz, (GetTickCount64() / 300) % 4, ", b=" + std::to_string(static_cast<int>(once_buf_full > 0 ? 101 : buf_proc)) + "% f=" + std::to_string(list.size()));
+			perc(readden * 100.0 / filesiz, (GetTickCount64() / 300) % 4, ", f=" + std::to_string(list.size()));
 		}
 
-		c->setSpeed(Sockets::internet_way::UPLOAD);
+		msg("Sent file successfully.");
+		c->send({ "end", static_cast<int>(packages_id::FILE_CLOSE) });
+		handle.close();
 
-		if (handle) {
-			msg("Sent file successfully.");
-			c->send({ "end", static_cast<int>(packages_id::FILE_CLOSE) });
-			fclose(handle);
+		return 1;
+	};
+
+
+	while (!die && list.size() > 0 && c->isConnected()) {
+
+		// 1 skip/clean, 0 try again, -1 return
+		int res = handle_pack(list[0]);
+
+		switch (res) {
+		case 1: // clean once
+			list.erase(list.begin());
+			break;
+		case 0: // try again
+			continue;
+		case -1: // cancel all
+			return;
 		}
-
-		list.erase(list.begin());
 	}
-	c->considerEmptyPackagesOnDataFlow(true);
 	working = false;
 	syst.clear();
 }
 
-void handlePackages(SuperMutex& client_m, bool& die, Sockets::con_client* c, bool& receive, std::vector<Sockets::final_package>& messages, std::string& syst) {
+void handlePackages(bool& message_sent, SuperMutex& client_m, bool& die, Sockets::con_client* c, bool& receive, std::vector<Sockets::final_package>& messages, std::string& syst) {
 	if (!c) return;
-	if (!c->still_on()) return;
-	FILE* handle = nullptr;
+	if (!c->isConnected()) return;
+	SmartFILE handle;
 	LONGLONG filesiz = 1, written = 0;
 	ULONGLONG latest_perc_upd = 0;
 
-	auto closeall = [&handle, &syst, &filesiz, &written]() {if (handle) fclose(handle); filesiz = 1;  written = 0; };
+	auto closeall = [&handle, &syst, &filesiz, &written]() {handle.close(); filesiz = 1;  written = 0; };
 	auto msg = [&syst](const std::string s) {std::string c = std::to_string(GetTickCount64() % 10000); size_t a = c.length(); syst = "[#" + [&]() {std::string k; for (int u = 4; u > a; u--) k += '0'; return k; }() + c + "] " + s; };
 	auto perc = [&](const double d) {if (GetTickCount64() - latest_perc_upd > 200) { latest_perc_upd = GetTickCount64();  char buff[8]; sprintf_s(buff, "%02.1lf%c", (d > 100.0 ? 100.0 : (d < 0.0 ? 0.0 : d)), '%'); msg("Received " + std::string(buff)); }};
 	
@@ -944,8 +925,10 @@ void handlePackages(SuperMutex& client_m, bool& die, Sockets::con_client* c, boo
 
 	msg("Waiting for event...");
 
+	Sockets::final_package lmsg;
+
 	while (!die) {
-		if (!c->still_on()) {
+		if (!c->isConnected()) {
 			closeall();
 			syst.clear();
 			return;
@@ -957,13 +940,22 @@ void handlePackages(SuperMutex& client_m, bool& die, Sockets::con_client* c, boo
 
 		client_m.lock();
 
-		if (c->recv(pkg)) {
+		if (c->recv(pkg, false)){
 
 			switch (pkg.data_type) {
 
+			case static_cast<int>(packages_id::VERSION_CHECK):
+			case static_cast<int>(packages_id::PASSWORD_CHECK):
+				msg("Weird behaviour got! Bye.");
+				c->kill();
+				continue;
 			case static_cast<int>(packages_id::MESSAGE):
 				msg("Got message.");
 				messages.push_back(pkg);
+				c->send({ "good", static_cast<int>(packages_id::MESSAGE_SENT)});
+				break;
+			case static_cast<int>(packages_id::MESSAGE_SENT):
+				message_sent = true;
 				break;
 
 			case static_cast<int>(packages_id::FILE_AVAILABLE):
@@ -980,23 +972,17 @@ void handlePackages(SuperMutex& client_m, bool& die, Sockets::con_client* c, boo
 
 			case static_cast<int>(packages_id::FILE_OPEN):
 				{
-					if (handle) fclose(handle);
+					handle.close();
 
 					cleanAvoidPath(pkg.variable_data);
-					auto err = lsw_fopen(handle, pkg.variable_data.c_str(), "wb");
-					if (err || !handle) {
+					if (!handle.open(pkg.variable_data.c_str(), file_modes::WRITE)) {
 						msg("Failed opening file to receive transfer!");
 						c->send({ "notgood", static_cast<int>(packages_id::FILE_CLOSE) });
-						handle = nullptr;
 						client_m.unlock();
-						c->considerEmptyPackagesOnDataFlow(true);
-						c->setSpeed(Sockets::internet_way::DOWNLOAD);
 						continue;
 					}
 					else {
 						msg("Opened file for transfer!");
-						c->considerEmptyPackagesOnDataFlow(false);
-						c->setSpeed(Sockets::internet_way::DOWNLOAD, 0);
 						c->send({ "good", static_cast<int>(packages_id::FILE_OPEN) });
 					}
 				}
@@ -1013,16 +999,16 @@ void handlePackages(SuperMutex& client_m, bool& die, Sockets::con_client* c, boo
 					for (ULONGLONG t = GetTickCount64() + static_cast<ULONGLONG>(10e3); GetTickCount64() < t && !c->hasPackage();) Sleep(10);
 
 					if (!c->hasPackage()) { // discard file size, took too long
-#ifndef IGNORE_TIMEOUT
+	#ifndef IGNORE_TIMEOUT
 						c->send({ "timeout", static_cast<int>(packages_id::FILE_CLOSE) });
 						msg("Failed to receive file. Reason: Timeout");
 						client_m.unlock();
 						c->considerEmptyPackagesOnDataFlow(true);
 						continue;
-#else
+	#else
 						msg("Timeout? Keeping up.");
-						while (!c->hasPackage() && c->still_on()) Sleep(20);
-#endif
+						while (!c->hasPackage() && c->isConnected()) Sleep(20);
+	#endif
 					}
 					c->recv(pkg);
 
@@ -1062,16 +1048,16 @@ void handlePackages(SuperMutex& client_m, bool& die, Sockets::con_client* c, boo
 
 					do {
 						if (GetTickCount64() > t) {
-#ifndef IGNORE_TIMEOUT
+	#ifndef IGNORE_TIMEOUT
 							pkg.data_type = static_cast<int>(packages_id::FILE_CLOSE);
 							end_success = false;
 							c->send({ "timeout", static_cast<int>(packages_id::FILE_CLOSE) });
 							msg("Failed to receive file. Reason: Timeout");
 							c->considerEmptyPackagesOnDataFlow(true);
 							break;
-#else
+	#else
 							msg("This is taking some time... P=" + std::to_string(pkg.data_type) + ";S=" + std::to_string(pkg.variable_data.size()));
-#endif
+	#endif
 						}
 							
 						if (c->recv(pkg)) {
@@ -1095,7 +1081,7 @@ void handlePackages(SuperMutex& client_m, bool& die, Sockets::con_client* c, boo
 				break;*/
 			case static_cast<int>(packages_id::FILE_RECEIVING):
 				{
-					written += lsw_fwrite(handle, pkg.variable_data);
+					written += handle.write(pkg.variable_data);
 					if (filesiz > 0) perc(written * 100.0 / filesiz);
 					else msg("Receiving " + std::to_string(written) + " byte(s)...");
 					//t = GetTickCount64() + static_cast<ULONGLONG>(10e3);
@@ -1104,13 +1090,10 @@ void handlePackages(SuperMutex& client_m, bool& die, Sockets::con_client* c, boo
 			case static_cast<int>(packages_id::FILE_CLOSE):
 				closeall();
 				msg("File saved successfully.");
-				c->setSpeed(Sockets::internet_way::DOWNLOAD);
-				c->considerEmptyPackagesOnDataFlow(true);
 				break;
 			}
 		}
 		client_m.unlock();
-		//if (!last_was_receive) Sleep(20);
 	}
 	syst.clear();
 }

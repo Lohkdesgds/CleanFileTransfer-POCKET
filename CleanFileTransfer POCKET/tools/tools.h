@@ -51,6 +51,8 @@ namespace LSW {
 			template<size_t N> inline const size_t strlen_s(char(&str)[N]) { return strnlen_s(str, N); }
 
 			template<typename T> const T* assert_cast(const T* w, const Abort::abort_level ab = Abort::abort_level::GIVEUP) { if (!w) { throw Abort::Abort(__FUNCSIG__, "assert_cast got exception: null", ab); } return w; }
+
+			template<typename T, typename... Args> T* new_guaranteed(Args... args) { T* ptr = nullptr; while (!(ptr = new T(args...))); return ptr; }
 		}
 	}
 }

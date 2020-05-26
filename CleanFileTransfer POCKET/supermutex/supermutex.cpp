@@ -24,6 +24,7 @@ namespace LSW {
 
 		void SuperMutex::lock()
 		{
+			std::mutex defu;
 			if (!mu.try_lock()) {
 				std::unique_lock<std::mutex> ul(defu);
 				do {
@@ -62,6 +63,22 @@ namespace LSW {
 				hasunlocked = false;
 				you->lock();
 			}
+		}
+
+		void Waiter::wait_signal(const size_t max_t)
+		{
+			std::mutex defu;
+			std::unique_lock<std::mutex> ul(defu);
+			if (max_t == 0) cond.wait(ul);
+			else cond.wait_for(ul, std::chrono::milliseconds(max_t));
+		}
+		void Waiter::signal_one()
+		{
+			cond.notify_one();
+		}
+		void Waiter::signal_all()
+		{
+			cond.notify_all();
 		}
 	}
 }

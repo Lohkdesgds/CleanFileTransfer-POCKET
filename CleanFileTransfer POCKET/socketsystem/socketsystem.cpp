@@ -8,7 +8,7 @@ namespace LSW {
             {
                 if (init) return true;
 
-                if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) return !(failure = true);
+                if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) return [&]{failure = true; return false;}();
 
                 struct addrinfo hints;
 
@@ -23,7 +23,7 @@ namespace LSW {
                 if (isthis_ipv6 >= 0) hints.ai_flags = AI_PASSIVE;
 
                 // Resolve the server address and port
-                if (getaddrinfo(ip_str, port_str, &hints, &result) != 0) return !(failure = true);
+                if (getaddrinfo(ip_str, port_str, &hints, &result) != 0) return [&]{failure = true; return false;}();
 
                 init = true;
                 return true;
@@ -78,314 +78,271 @@ namespace LSW {
                 return true;
             }
 
-            /*void con_client::__keep_connection_alive() // starts receiving
+
+
+            void con_client::start_threads()
             {
-                bool locked_recv = false, locked_send = false;
-                bool safedie = false;
-                while (!die && !safedie) {
-                    // -------- RECV -------- //
-#ifdef LSW_EXPERIMENTAL_BOOST
-                    bool _lock_at;
+                if (!thr_recv) thr_recv = Tools::new_guaranteed<std::thread>([&]() {__thr_recv(); });
+                if (!thr_send) thr_send = Tools::new_guaranteed<std::thread>([&]() {__thr_send(); });
+                if (!thr_mont) thr_mont = Tools::new_guaranteed<std::thread>([&]() {__thr_mont(); }); // kinda light task, shall see later
+            }
 
-                    do {
-                        _lock_at = false;
-#endif
+            void con_client::__set_kill()
+            {
+                kill_threads = true;
+                latest_update = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
+                wait_recv.signal_all();
+                send_wait.signal_all();
+            }
 
-                        __internal_package pkg;
-                        if (!recv_package(pkg)) {
-                            die = true;
-                            continue;
-                        }
-
-                        if (pkg.data_type != 0) {
-                            if (!locked_recv) received_hold.lock();
-                            locked_recv = true;
-
-                            received.push_back(pkg);
-#ifdef LSW_EXPERIMENTAL_BOOST
-                            if (pkg.combine_with_n_more > 0) {
-                                _lock_at = true;
-                            }
-#endif
-                        }
-                        else {
-                            if (locked_recv) received_hold.unlock();
-                            locked_recv = false;
-                        }
-#ifdef LSW_EXPERIMENTAL_BOOST
-                    } while (_lock_at);
-#endif
-
-                    // -------- SEND -------- //
-                    __internal_package empty;
-#ifdef LSW_EXPERIMENTAL_BOOST
-                    do {
-                        _lock_at = false;
-#endif
-
-                        if (sending.size() > 0) {
-                            if (!locked_send) sending_hold.lock();
-                            locked_send = true;
-
-                            empty = sending[0];
-                            sending.erase(sending.begin());
-#ifdef LSW_EXPERIMENTAL_BOOST
-                            if (empty.combine_with_n_more > 0) {
-                                _lock_at = true;
-                            }
-#endif
-                        }
-                        else {
-                            if (locked_send) sending_hold.unlock();
-                            locked_send = false;
-                        }
-                        if (!send_package(empty)) {
-                            safedie = true;
-                            continue;
-                        }
-#ifdef LSW_EXPERIMENTAL_BOOST
-                    } while (_lock_at);
-#endif
-
-                    //printf_s("\n- updated -");
-                    if (!unlocked) Sleep(connection_speed_delay);
-                }
-                if (safedie || die) {
-                    closesocket(this->Connected);
-                    die = true;
-                    Connected = INVALID_SOCKET;
-                }
-
-                if (locked_recv) received_hold.unlock();
-                if (locked_send) sending_hold.unlock();
+            /*void con_client::__task_recv()
+            {
+                task_recv++;
             }*/
 
-            void con_client::___lock_s()
+            /*void con_client::__task_send()
             {
-                sending_hold.lock();
+                task_send++;
+            }*/
+
+            void con_client::__ploss_recv()
+            {
+                package_loss_recv++;
             }
 
-            void con_client::___unlock_s()
+            void con_client::__ploss_send()
             {
-                sending_hold.unlock();
-            }
-            void con_client::___lock_r()
-            {
-                received_hold.lock();
+                package_loss_send++;
             }
 
-            void con_client::___unlock_r()
+            int con_client::__send_small(__internal_package& small_p)
             {
-                received_hold.unlock();
+                if (nt_prunt) nt_prunt("s " + std::to_string(small_p.data_len) + "B");
+                auto ret = ::send(Connected, (const char*)(&(small_p)), sizeof(__internal_package), 0);
+                if (ret) { task_send += ret; task_totl += ret; }
+                return ret > 1 ? ret == sizeof(__internal_package) : ret;
             }
 
-            void con_client::__keep_monitoring()
+            int con_client::__recv_small(__internal_package& small_p)
             {
-                if (prunt) prunt("init monitor...");
+                auto ret = ::recv(Connected, (char*)&small_p, sizeof(__internal_package), 0);
+                if (nt_prunt) nt_prunt("r " + std::to_string(small_p.data_len) + "B");
+                if (ret) { task_recv += ret; task_totl += ret; }
+                return ret > 1 ? ret == sizeof(__internal_package) : ret;
+            }
 
-                const size_t package_size = sizeof(__internal_package);
-
-                while (!die) {
-                    if (GetTickCount64() > dt_mon_tks) {
-                        dt_mon_tks = GetTickCount64() + static_cast<ULONGLONG>(1e3);
-                        sending_ticks = _snd_t;//(sending_ticks + _snd_t) / 2;
-                        recving_ticks = _rcv_t;//(recving_ticks + _rcv_t) / 2;
-                        if (prunt) {
-                            double coef_data_send, coef_data_recv;
-                            coef_data_send = package_size * static_cast<double>(sending_ticks);
-                            coef_data_recv = package_size * static_cast<double>(recving_ticks);
-
-                            prunt((mon_cons_all ? "ALLdt " : "TRNSF ") + /*"▲"*/std::string("^") + (Tools::byteAutoString(coef_data_send) + "B/s") + /*" ▼"*/" v" + (Tools::byteAutoString(coef_data_recv) + "B/s"));
+            void con_client::__thr_send()
+            {
+                auto handle_send = [&](__internal_package& small_p)->bool {
+                    int result = 0;
+                    do {
+                        result = __send_small(small_p);
+                        if (result == 0) {
+                                __ploss_send();
                         }
-                        _snd_t = _rcv_t = 0;
-                        auto dt = GetTickCount64() - dt_mon_tks - 50;
-                        if (dt > 0 && dt < 1000) Sleep(static_cast<DWORD>(dt)); // lil fast
-                    }
-                    else Sleep(20);
-                }
-                if (prunt) prunt("monitor has deinit.");
-                sending_ticks = recving_ticks = 0;
-            }
+                        else if (result < 0) {
+                            if (bw_prunt) bw_prunt("Connection failed.");
+                            __set_kill();
+                            return false;
+                        }
+                    } while (result <= 0);
+                    return true;
+                };
 
-            void con_client::__tick_send()
-            {
-                _snd_t++;
-            }
-
-            void con_client::__tick_recv()
-            {
-                _rcv_t++;
-            }
-
-            void con_client::__keep_receive()
-            {
-                bool safedie = false;
-
-                while (!die && !safedie) {
-
-                    __internal_package pkg;
-                    if (!recv_package(pkg)) {
-                        die = true;
-                        continue;
-                    }
-                    if (mon_cons_all) __tick_recv();
-
-                    if (pkg.data_type != 0) {
-                        if (!mon_cons_all) __tick_recv();
-
-                        while (received.size() >= max_buf) Sleep(connection_speed_delay);
-                        ___lock_r();
-                        received.push_back(pkg);
-                        ___unlock_r();
-                    }
-
-                    if (download_delay > 0) Sleep(static_cast<DWORD>(download_delay));
-                }
-
-                die |= safedie;
-
-                if (die) {
-                    closesocket(Connected);
-                    Connected = INVALID_SOCKET;
-                }
-            }
-
-            void con_client::__keep_sending()
-            {
-                bool safedie = false;
-                auto l_send = [&](__internal_package& p) {if (!send_package(p)) { safedie = true; return false; } return true; };
-
-                while (!die && !safedie) {
-                    __internal_package empty;
-
+                while (!kill_threads) {
                     if (sending.size() > 0) {
-                        ___lock_s();
-                        empty = sending[0];
-                        sending.erase(sending.begin());
-                        ___unlock_s();
-                        if (!mon_cons_all) __tick_send();
+
+                        send_wait.wait_signal();
+
+                        sending_m.lock();
+
+                        for (auto& pkg : sending) {
+                            __internal_package small_p;
+
+                            if (!pkg) {
+                                if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] NULL PACKAGE SKIP!");
+                                continue;
+                            }
+
+                            size_t remaining = pkg->variable_data.size();
+                            char* pos = pkg->variable_data.data();
+
+                            small_p.data_type = pkg->data_type; // still the same till the end
+
+                            if (remaining == 0) {
+                                small_p.combine_with_n_more = 0;
+                                small_p.data_len = 0;
+                                if (!handle_send(small_p)) continue;
+                                if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] SENT N-PACKAGE #" + std::to_string(small_p.data_type) + "!");
+                                total_sockets_sr++;
+                            }
+                            else {
+                                while (remaining > 0) {
+                                    small_p.combine_with_n_more = static_cast<int>((remaining - 1) / default_package_size);
+
+                                    size_t expected = default_package_size;
+                                    if (remaining < expected) { expected = remaining; remaining = 0; }
+                                    else remaining -= default_package_size;
+
+                                    memcpy_s(small_p.data, default_package_size, pos, expected);
+                                    pos += expected;
+                                    small_p.data_len = static_cast<int>(expected);
+
+                                    if (!handle_send(small_p)) continue;                                    
+
+                                    //__task_send();
+                                }
+                                if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] SENT PACKAGE #" + std::to_string(small_p.data_type) + "!");
+                                total_sockets_sr++;
+                            }
+
+                            delete pkg;
+                            pkg = nullptr;
+                            sending.erase(sending.begin());
+                        }
+
+                        sending_m.unlock();
                     }
-                    if (!l_send(empty)) continue; // autobreak
-
-                    if (mon_cons_all) __tick_send();
-
-                    if (upload_delay > 0) Sleep(static_cast<DWORD>(upload_delay));
                 }
-
-                die |= safedie;
             }
 
-            bool con_client::_send_raw(void* v, int s)
+            void con_client::__thr_recv()
             {
-                return ::send(Connected, (char*)v, s, 0) > 0;
+                final_package pkg;
+                auto handle_recv = [&](__internal_package& small_p)->bool {
+                    int result = 0;
+                    do {
+                        result = __recv_small(small_p);
+                        if (result == 0) {
+                            __ploss_recv();
+                        }
+                        else if (result < 0) {
+                            if (bw_prunt) bw_prunt("Connection failed.");
+                            __set_kill();
+                            return false;
+                        }
+                    } while (result <= 0);
+                    return true;
+                };
+                auto push = [&](final_package& pkg) {received_m.lock(); received.push_back(Tools::new_guaranteed<final_package>(pkg.variable_data, pkg.data_type)); auto siz = received.size(); received_m.unlock(); wait_recv.signal_all(); pkg.data_type = 0; pkg.variable_data.clear(); return siz; };
+
+                while (!kill_threads) {
+
+                    __internal_package small_p;
+
+                    if (!handle_recv(small_p)) continue;
+
+                    if (small_p.data_len == 0) {
+                        auto cpyy = pkg.data_type;
+                        auto len = push(pkg);
+                        if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] RECEIVED N-PACKAGE #" + std::to_string(cpyy) + " [" + std::to_string(len) + " PKGS IN BUFFER]");
+                        total_sockets_sr++;
+                        continue;
+                    }               
+
+                    if (!pkg.variable_data.size()) pkg.data_type = small_p.data_type;
+
+                    pkg.variable_data.cat(static_cast<char*>(small_p.data), small_p.data_len);
+
+                    if (small_p.combine_with_n_more == 0) {
+                        auto cpyy = pkg.data_type;
+                        auto len = push(pkg);
+                        if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] RECEIVED PACKAGE #" + std::to_string(cpyy) + " [" + std::to_string(len) + " PKGS IN BUFFER]");
+                        total_sockets_sr++;
+                    }
+
+                    //__task_recv();
+                }
             }
 
-            bool con_client::_recv_raw(void* v, int s)
+            void con_client::__thr_mont()
             {
-                return ::recv(Connected, (char*)v, s, 0) > 0;
-            }
+                std::chrono::milliseconds upd = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
 
-            bool con_client::send_blank()
-            {
-                __internal_package blunk;
-                return send_package(blunk);
-            }
+                size_t latest_end_task_recv = end_task_recv + 1;
+                size_t latest_end_task_send = end_task_send + 1;
+                size_t latest_task_totl = task_totl;
 
-            bool con_client::send_package(__internal_package& pack)
-            {
-                //if (pack.data_len) {
-                    //if (prunt) prunt("SENT " + std::to_string(pack.data_len) + " byte(s)");
-                    //printf_s("Sending package of size %d.\n", pack.data_len);
-                //}
+                while (!kill_threads) {
+                    auto _t = (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()) - upd);
+                    if (_t.count() < 1000) std::this_thread::sleep_for(std::chrono::milliseconds(1000) - _t);
+                    upd = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
 
-                void* end = &pack;
-                int siz = sizeof(__internal_package);
+                    end_task_recv = task_recv;
+                    task_recv = 0;
+                    end_task_send = task_send;
+                    task_send = 0;
 
-                return _send_raw(end, siz);
-            }
+                    if (bw_prunt && (end_task_recv != latest_end_task_recv || end_task_send != latest_end_task_send) || (latest_task_totl != task_totl)) {
+                        latest_end_task_recv = end_task_recv;
+                        latest_end_task_send = end_task_send;
+                        latest_task_totl = task_totl;
 
-            bool con_client::recv_package(__internal_package& pack)
-            {
-                void* end = &pack;
-                int siz = sizeof(__internal_package);
+                        /*"▲" " ▼"*/
 
-                bool a = _recv_raw(end, siz);
-
-                //if (pack.data_len) {
-                    //if (prunt) prunt("RECV " + std::to_string(pack.data_len) + " byte(s)");
-                    //printf_s("Received package of size %d.\n", pack.data_len);
-                //}
-
-                return a;
-            }
-
-            /*void con_client::start_internally_as_client()
-            {
-                if (!keep_alive_connection) keep_alive_connection = new std::thread([&]() {this->send_blank();  __keep_connection_alive(); });
-            }
-
-            void con_client::start_internally_as_host()
-            {
-                if (!keep_alive_connection) keep_alive_connection = new std::thread([&]() { __keep_connection_alive(); });
-            }*/
-
-            
-
-            void con_client::start_internally_universal()
-            {
-                if (!alive_recving_part) alive_recving_part = new std::thread([&]() {__keep_receive(); });
-                if (!alive_sending_part) alive_sending_part = new std::thread([&]() {__keep_sending(); });
-                if (!connection_monitor) connection_monitor = new std::thread([&]() {__keep_monitoring(); }); // kinda light task, shall see later
+                        bw_prunt(
+                            std::string("^") + Tools::byteAutoString(end_task_send) + "B/s" +
+                            (end_package_loss_send > 0 ? (" PL:" + std::to_string(end_package_loss_send) + "/s") : "") +
+                            " v" + Tools::byteAutoString(end_task_recv) + "B/s" +
+                            (end_package_loss_recv > 0 ? (" PL:" + std::to_string(end_package_loss_recv) + "/s") : "") +
+                            " T" + Tools::byteAutoString(task_totl) + "B");
+                    }
+                }
             }
 
             con_client::con_client(SOCKET already_connected) : core()
             {
                 if (already_connected != INVALID_SOCKET) {
                     Connected = already_connected;
-                    start_internally_universal();
-                    //start_internally_as_host();
+                    start_threads();
+                    latest_update = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
                 }
             }
 
             con_client::~con_client()
             {
-                kill_connection();
-                received.clear();
-                sending.clear();
+                kill();
             }
 
             bool con_client::connect(const char* a, const int b)
             {
                 if (!core.initialize(a, b, -1)) return false;
                 if (!core.as_client(Connected)) return false;
-                start_internally_universal();
+                start_threads();
+                latest_update = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
                 //start_internally_as_client();
                 return true;
             }
 
-            void con_client::kill_connection()
+            void con_client::kill()
             {
-                die = true;
-                if (alive_sending_part) {
-                    alive_sending_part->join();
-                    delete alive_sending_part;
-                    alive_sending_part = nullptr;
+                __set_kill();
+                if (Connected != INVALID_SOCKET) closesocket(Connected);
+                Connected = INVALID_SOCKET;
+                if (thr_mont) {
+                    thr_mont->join();
+                    delete thr_mont;
+                    thr_mont = nullptr;
                 }
-                if (alive_recving_part) {
-                    alive_recving_part->join();
-                    delete alive_recving_part;
-                    alive_recving_part = nullptr;
+                if (thr_recv) {
+                    thr_recv->join();
+                    delete thr_recv;
+                    thr_recv = nullptr;
                 }
-                if (connection_monitor) {
-                    connection_monitor->join();
-                    delete connection_monitor;
-                    connection_monitor = nullptr;
+                if (thr_send) {
+                    thr_send->join();
+                    delete thr_send;
+                    thr_send = nullptr;
                 }
+                for (auto& i : received) if (i) { delete i; i = nullptr; }
+                for (auto& i : sending) if (i) { delete i; i = nullptr; }
+                received.clear();
+                sending.clear();
             }
 
-            bool con_client::still_on()
+            bool con_client::isConnected()
             {
-                return !die;
+                return !kill_threads;
             }
 
             size_t con_client::hasPackage()
@@ -398,125 +355,43 @@ namespace LSW {
                 return sending.size();
             }
 
-            void con_client::setSpeed(const internet_way way, const size_t delay)
+            void con_client::send(final_package&& w)
             {
-                switch (way) {
-                case internet_way::DOWNLOAD:
-                    download_delay = delay;
-                    break;
-                case internet_way::UPLOAD:
-                    upload_delay = delay;
-                    break;
-                }
+                sending_m.lock();
+                sending.push_back(Tools::new_guaranteed<final_package>(w.variable_data, w.data_type));
+                sending_m.unlock();
+                send_wait.signal_all();
             }
 
-            void con_client::considerEmptyPackagesOnDataFlow(const bool m)
+            bool con_client::recv(final_package& end, bool wait)
             {
-                mon_cons_all = m;
-            }
+                if (received.size() == 0 && !wait) return false;
+                while (received.size() == 0 && wait) { wait_recv.wait_signal(connection_timeout_speed); }
 
-            /*bool con_client::send_nolock(final_package pack)
-            {
-                if (sending.size() >= max_buf) return false;
-
-                if (!sending_hold.try_lock()) return false;
-
-                bool has_unlocked = false;
-
-                while (pack.variable_data.size() > 0)
-                {
-                    __internal_package small_p;
-                    size_t max_siz = pack.variable_data.size();
-                    for (small_p.data_len = 0; small_p.data_len < max_siz && small_p.data_len < default_package_size; small_p.data_len++)
-                    {
-                        small_p.data[small_p.data_len] = pack.variable_data[0];
-                        pack.variable_data.erase(0, 1);
-                    }
-                    small_p.combine_with_n_more = (static_cast<int>(max_siz) - 1) / default_package_size; // if eq, 0
-                    small_p.data_type = pack.data_type;
-
-                    if (sending.size() > max_buf) {
-                        if (!has_unlocked) sending_hold.unlock();
-                        has_unlocked = true;
-                        while (sending.size() > max_buf) Sleep(connection_speed_delay);
-                    }
-                    if (has_unlocked) { sending_hold.lock(); has_unlocked = false; }
-                }
-                sending_hold.unlock();
+                received_m.lock();
+                auto& i = received[0];
+                end.data_type = i->data_type;
+                end.variable_data = i->variable_data;
+                delete i;
+                i = nullptr;
+                received.erase(received.begin());
+                received_m.unlock();
                 return true;
-            }*/
-
-            void con_client::send(final_package&& pack)
-            {
-                if (pack.variable_data.size() == 0) return;
-
-                ___lock_s();
-
-                size_t pack_siz_n = pack.variable_data.size();
-                auto* pp = pack.variable_data.data();
-
-                while (pack_siz_n > 0)
-                {
-                    __internal_package small_p;
-                    size_t max_siz = pack_siz_n;
-                    for (small_p.data_len = 0; small_p.data_len < max_siz && small_p.data_len < default_package_size; small_p.data_len++)
-                    {
-                        small_p.data[small_p.data_len] = *pp;
-                        //pack.variable_data.erase(0, 1);
-                        pp++;
-                        if (pack_siz_n) pack_siz_n--;
-                    }
-                    small_p.combine_with_n_more = (static_cast<int>(max_siz) - 1) / default_package_size; // if eq, 0
-                    small_p.data_type = pack.data_type;
-
-                    if (sending.size() > max_buf) {
-                        ___unlock_s();
-                        while (sending.size() > max_buf) Sleep(connection_speed_delay);
-                        ___lock_s();
-                    }
-
-                    sending.push_back(small_p);
-                }
-
-                ___unlock_s();
             }
 
-            bool con_client::recv(final_package& pack)
+            bool con_client::hadEventRightNow()
             {
-                if (!hasPackage()) return false;
-
-                pack.variable_data.clear();
-                ___lock_r();
-
-                int type = 0;
-
-                for (bool still_has = true; still_has && received.size() > 0;)
-                {
-                    auto& i = *received.begin();
-
-                    still_has = i.combine_with_n_more != 0;
-                    if (type == 0) type = i.data_type;
-                    else if (type != i.data_type) { // different package? different recv! Damn it.
-                        still_has = false;
-                        continue;
-                    }
-
-                    //pack.variable_data.set(i.data, i.data_len); // sets size inside
-
-                    for (int u = 0; u < i.data_len; u++) pack.variable_data += i.data[u];
-
-                    pack.data_type = i.data_type;
-
-                    received.erase(received.begin());
-                }
-                ___unlock_r();
-
-                return pack.variable_data.size() > 0;
+                return ((std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()) - latest_update).count() < connection_timeout_speed);
             }
 
-            void con_client::hookPrint(std::function<void(const std::string)> f)
+            void con_client::hookPrintBandwidth(std::function<void(const std::string)> f)
             {
-                prunt = f;
+                bw_prunt = f;
+            }
+
+            void con_client::hookPrintEvent(std::function<void(const std::string)> f)
+            {
+                nt_prunt = f;
             }
 
             void con_host::auto_accept()
@@ -528,9 +403,9 @@ namespace LSW {
                     SOCKET ClientSocket = accept(Listening, NULL, NULL);
                     if (ClientSocket == INVALID_SOCKET) continue;
 
-                    con_client* dis = new con_client(ClientSocket);
+                    con_client* dis = Tools::new_guaranteed<con_client>(ClientSocket);
                     if (connections.size() >= max_connections_allowed) {
-                        dis->kill_connection();
+                        dis->kill();
                         delete dis;
                         continue;
                     }
@@ -541,7 +416,9 @@ namespace LSW {
                     connections.push_back(dis);
                     connections_m.unlock();
 
-                    if (prunt) prunt("Someone has connected!");
+                    wait_new_connection.signal_all();
+
+                    if (bw_prunt) bw_prunt("Someone has connected!");
                     //printf_s("\nSomeone has connected!");
 
                 }
@@ -552,17 +429,19 @@ namespace LSW {
             void con_host::auto_cleanup()
             {
                 while (still_running) {
-                    Sleep(connection_timeout_speed);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(connection_timeout_speed));
 
                     connections_m.lock();
 
                     for (size_t p = 0; p < connections.size(); p++)
                     {
                         auto& i = connections[p];
-                        if (!i->still_on()) {
+                        if (!i->isConnected() && !i->hadEventRightNow()) { // at least stay dead for a while
+                            i->kill();
                             delete i;
                             connections.erase(connections.begin() + p--);
-                            if (prunt) prunt("Someone has disconnected.");
+                            wait_new_connection.signal_all();
+                            if (bw_prunt) bw_prunt("Someone has disconnected.");
                             //printf_s("\nSomeone has disconnected!");
                         }
                     }
@@ -576,8 +455,8 @@ namespace LSW {
                 core.initialize(a, b, c);
                 core.as_host(Listening);
                 still_running = true;
-                listener = new std::thread([&]() {auto_accept(); });
-                autodisconnect = new std::thread([&]() {auto_cleanup(); });
+                listener = Tools::new_guaranteed<std::thread>([&]() {auto_accept(); });
+                autodisconnect = Tools::new_guaranteed<std::thread>([&]() {auto_cleanup(); });
             }
 
             con_host::con_host(const int port, const bool ipv6)
@@ -594,7 +473,7 @@ namespace LSW {
             {
                 setMaxConnections(0);
                 still_running = false;
-                for (auto& i : *this) i->kill_connection();
+                for (auto& i : *this) i->kill();
                 con_client oopsie; // unlock auto_accept (trigger a loop)
                 oopsie.connect();
                 listener->join();
@@ -634,9 +513,25 @@ namespace LSW {
             {
                 max_connections_allowed = v;
             }
-            void con_host::hookPrint(std::function<void(const std::string)> f)
+            con_client* con_host::waitNewConnection(const size_t timeout)
             {
-                prunt = f;
+                auto gTime = [] {return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); };
+                auto tnow = gTime();
+
+                size_t now = size();
+                if (connections.size() > 0) {
+                    if (connections.back()->hadEventRightNow()) return connections.back();
+                }
+                while (connections.size() <= now) {
+                    if (timeout && static_cast<size_t>(gTime() - tnow) > timeout) return nullptr;
+                    wait_new_connection.wait_signal(200);
+                    if (now > size()) now--;
+                }
+                return connections.back(); // latest push_back
+            }
+            void con_host::hookPrintBandwidth(std::function<void(const std::string)> f)
+            {
+                bw_prunt = f;
             }
         }
     }

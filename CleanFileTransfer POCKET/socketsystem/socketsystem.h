@@ -47,10 +47,11 @@ namespace LSW {
 		namespace Sockets {
 
 			constexpr int default_port = 42069;
-			constexpr size_t default_package_size = 1 << 13; // 8 kB
-			constexpr size_t connection_speed_delay = 1000 / 10; // 10 packages per sec
-			constexpr int connection_timeout_speed = 10000; // 10 sec
-			constexpr size_t max_buf = 20;
+			constexpr size_t default_package_size = 1 << 16; // 64 kB
+			//constexpr size_t default_package_size = 65; // test
+			//constexpr size_t connection_speed_delay = 1000 / 10; // 10 packages per sec
+			constexpr int connection_timeout_speed = 1000; // 1.0 sec, also used on recv if huge package is incomplete and it waits the recv to get what is left
+			constexpr size_t max_buf = 200;
 
 			const std::string default_hello = "LSW_connection_verification";
 
@@ -66,9 +67,9 @@ namespace LSW {
 			struct final_package {
 				string_sized variable_data;
 				int data_type = 0;
-				final_package() = default;
-				final_package(string_sized&& sz, const int dt) { variable_data.reserve(sz.size()); memcpy_s(variable_data.data(), sz.size(), sz.data(), sz.size()); variable_data._set_size(sz.size()); data_type = dt; }
-				final_package(char* full, const size_t l, const int dt) { variable_data.reserve(l); memcpy_s(variable_data.data(), l, full, l); variable_data._set_size(l); data_type = dt; }
+				inline final_package() = default;
+				inline final_package(const string_sized& sz, const int& dt) : variable_data(sz), data_type(dt) { }
+				inline final_package(const char* full, const size_t l, const int dt) : variable_data(full, l), data_type(dt) { }
 			};
 
 
@@ -89,73 +90,58 @@ namespace LSW {
 
 				SOCKET Connected = INVALID_SOCKET;
 
-				std::thread* alive_sending_part = nullptr;
-				std::thread* alive_recving_part = nullptr;
-				std::thread* connection_monitor = nullptr;
+				std::thread* thr_recv = nullptr; bool thr_recv_running = false;
+				std::thread* thr_send = nullptr; bool thr_send_running = false;
+				std::thread* thr_mont = nullptr; bool thr_mont_running = false;
 
-				ULONGLONG dt_mon_tks = 0;
-				bool mon_cons_all = false;
-				size_t sending_ticks = 0, _snd_t = 0;
-				size_t recving_ticks = 0, _rcv_t = 0;
+				size_t task_recv = 0, end_task_recv = 0;
+				size_t task_send = 0, end_task_send = 0;
+				size_t task_totl = 0;
+				size_t package_loss_recv = 0, end_package_loss_recv = 0;
+				size_t package_loss_send = 0, end_package_loss_send = 0;
+				std::chrono::milliseconds latest_update = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
 
-				bool die = false;
-				//bool unlocked = false;
-				size_t upload_delay = connection_speed_delay;
-				size_t download_delay = connection_speed_delay;
+				std::vector<final_package*> sending, received;
+				SuperMutex sending_m, received_m;
+				Waiter wait_recv, send_wait;
+				bool kill_threads = false;
+				size_t total_sockets_sr = 0;
 
-				std::vector<__internal_package> received, sending;
-				SuperMutex received_hold, sending_hold;
+				std::function<void(std::string)> bw_prunt, nt_prunt;
 
-				std::function<void(const std::string)> prunt = std::function<void(const std::string)>();
+				//void __task_recv();
+				//void __task_send();
+				void __ploss_recv();
+				void __ploss_send();
 
-				void ___lock_s();
-				void ___unlock_s();
-				void ___lock_r();
-				void ___unlock_r();
+				int __send_small(__internal_package&);
+				int __recv_small(__internal_package&);
 
-				void __keep_monitoring();
+				void __thr_send();
+				void __thr_recv();
+				void __thr_mont();
 
-				void __tick_send();
-				void __tick_recv();
+				void start_threads();
 
-				//void __keep_connection_alive();
-				void __keep_receive();
-				void __keep_sending();
-
-				// later: thread keeping alive, std::vector to buffer send/recv, bool to tell if still up
-
-				bool _send_raw(void*, int);
-				bool _recv_raw(void*, int);
-
-				bool send_blank();
-
-				bool send_package(__internal_package&);
-				bool recv_package(__internal_package&);
-
-				//void start_internally_as_client();   // as client
-				//void start_internally_as_host(); // as host
-				void start_internally_universal(); // both ;P
-
+				void __set_kill();
 			public:
 				con_client(SOCKET = INVALID_SOCKET); // custom non-verified call (probably from host)
 				~con_client();
 
 				bool connect(const char* = "127.0.0.1", const int = default_port); // normally client call this one
 
-				void kill_connection(); // only if you really want to die
-				bool still_on();
+				void kill(); // only if you really want to die
+				bool isConnected();
 				size_t hasPackage();
 				size_t hasSending();
-				// packages per second
-				void setSpeed(const internet_way, const size_t = connection_speed_delay);
-				// if hookPrint, show total data (consider empty) or only actual data (only your data)?
-				void considerEmptyPackagesOnDataFlow(const bool);
 
-				//bool send_nolock(final_package);
 				void send(final_package&&);
-				bool recv(final_package&);
+				bool recv(final_package&, bool = true);
 
-				void hookPrint(std::function<void(const std::string)>);
+				bool hadEventRightNow();
+
+				void hookPrintBandwidth(std::function<void(const std::string)>);
+				void hookPrintEvent(std::function<void(const std::string)>);
 			};
 
 			class con_host {
@@ -164,14 +150,16 @@ namespace LSW {
 				SOCKET Listening = INVALID_SOCKET;
 
 				std::vector<con_client*> connections;
-				std::mutex connections_m;
+				SuperMutex connections_m;
 				size_t max_connections_allowed = 1;
+
+				Waiter wait_new_connection;
 
 				std::thread* listener = nullptr;
 				std::thread* autodisconnect = nullptr;
 				bool still_running = false;
 
-				std::function<void(const std::string)> prunt = std::function<void(const std::string)>();
+				std::function<void(const std::string)> bw_prunt = std::function<void(const std::string)>();
 
 				void auto_accept();
 				void auto_cleanup();
@@ -190,7 +178,9 @@ namespace LSW {
 
 				void setMaxConnections(const size_t);
 
-				void hookPrint(std::function<void(const std::string)>);
+				con_client* waitNewConnection(const size_t);
+
+				void hookPrintBandwidth(std::function<void(const std::string)>);
 			};
 		}
 	}

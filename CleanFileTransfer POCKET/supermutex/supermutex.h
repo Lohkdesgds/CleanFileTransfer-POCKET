@@ -16,7 +16,6 @@ namespace LSW {
 				void unlock();
 				bool is_locked() const;
 			} mu;
-			std::mutex defu;
 			std::condition_variable cond;
 		public:
 			void lock();
@@ -31,6 +30,14 @@ namespace LSW {
 			~AutoLock();
 			void unlock();
 			void lock();
+		};
+
+		class Waiter {
+			std::condition_variable cond;
+		public:
+			void wait_signal(const size_t = 0);
+			void signal_one();
+			void signal_all();
 		};
 	}
 }
