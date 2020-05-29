@@ -29,6 +29,7 @@ SocketSystem header:
 #include <string>
 #include <mutex>
 #include <functional>
+#include <memory>
 
 // import
 #include "..\abort\abort.h"
@@ -47,13 +48,12 @@ namespace LSW {
 		namespace Sockets {
 
 			constexpr int default_port = 42069;
-			constexpr size_t default_package_size = 1 << 16; // 64 kB
+			constexpr size_t default_package_size = 1 << 16; // was << 16 64 kB
 			//constexpr size_t default_package_size = 65; // test
 			//constexpr size_t connection_speed_delay = 1000 / 10; // 10 packages per sec
 			constexpr int connection_timeout_speed = 1000; // 1.0 sec, also used on recv if huge package is incomplete and it waits the recv to get what is left
-			constexpr size_t max_buf = 200;
+			constexpr size_t max_buf = 50;
 
-			const std::string default_hello = "LSW_connection_verification";
 
 			enum class internet_way {DOWNLOAD, UPLOAD};
 
@@ -62,14 +62,17 @@ namespace LSW {
 				int data_len = 0;
 				int data_type = 0;
 				int combine_with_n_more = 0;
+				size_t package_id = 0;
 			};
 
 			struct final_package {
-				string_sized variable_data;
+				std::string variable_data;
 				int data_type = 0;
+
 				inline final_package() = default;
-				inline final_package(const string_sized& sz, const int& dt) : variable_data(sz), data_type(dt) { }
+				inline final_package(const std::string& sz, const int& dt) : variable_data(sz), data_type(dt) { }
 				inline final_package(const char* full, const size_t l, const int dt) : variable_data(full, l), data_type(dt) { }
+				inline bool operator==(final_package& pkg) { return ((variable_data.compare(0, variable_data.size(), pkg.variable_data.data(), pkg.variable_data.size()) == 0) && data_type == pkg.data_type); }
 			};
 
 
@@ -96,16 +99,17 @@ namespace LSW {
 
 				size_t task_recv = 0, end_task_recv = 0;
 				size_t task_send = 0, end_task_send = 0;
-				size_t task_totl = 0;
+				size_t task_totl_recv = 0, task_totl_send = 0;
 				size_t package_loss_recv = 0, end_package_loss_recv = 0;
 				size_t package_loss_send = 0, end_package_loss_send = 0;
 				std::chrono::milliseconds latest_update = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
 
-				std::vector<final_package*> sending, received;
-				SuperMutex sending_m, received_m;
-				Waiter wait_recv, send_wait;
+				std::vector<std::shared_ptr<final_package>> sending, received;
+				std::mutex sending_m, received_m;
+				Waiter wait_recv, send_wait, recv_overflow_wait;
 				bool kill_threads = false;
 				size_t total_sockets_sr = 0;
+				size_t total_sockets_sending_only = 0;
 
 				std::function<void(std::string)> bw_prunt, nt_prunt;
 
@@ -114,8 +118,8 @@ namespace LSW {
 				void __ploss_recv();
 				void __ploss_send();
 
-				int __send_small(__internal_package&);
-				int __recv_small(__internal_package&);
+				bool __send_small(__internal_package&);
+				bool __recv_small(__internal_package&);
 
 				void __thr_send();
 				void __thr_recv();
@@ -135,13 +139,22 @@ namespace LSW {
 				size_t hasPackage();
 				size_t hasSending();
 
-				void send(final_package&&);
-				bool recv(final_package&, bool = true);
+				void send(std::string, const int);
+				void send(std::shared_ptr<final_package>);
+				bool recv_nolock(std::shared_ptr<final_package>&);
+				// size_t = maximum time to wait, 0 being inf, millisec
+				bool recv(std::shared_ptr<final_package>&, const size_t = 0);
 
-				bool hadEventRightNow();
+				bool hadEventRightNow(const size_t = connection_timeout_speed);
 
 				void hookPrintBandwidth(std::function<void(const std::string)>);
 				void hookPrintEvent(std::function<void(const std::string)>);
+
+				size_t getSendTrafficPerSec();
+				size_t getRecvTrafficPerSec();
+				size_t getSendTrafficTotal();
+				size_t getRecvTrafficTotal();
+				size_t getTotalTraffic();
 			};
 
 			class con_host {
@@ -178,7 +191,7 @@ namespace LSW {
 
 				void setMaxConnections(const size_t);
 
-				con_client* waitNewConnection(const size_t);
+				con_client* waitNewConnection(const size_t = 0);
 
 				void hookPrintBandwidth(std::function<void(const std::string)>);
 			};

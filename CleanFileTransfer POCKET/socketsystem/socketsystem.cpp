@@ -115,54 +115,83 @@ namespace LSW {
                 package_loss_send++;
             }
 
-            int con_client::__send_small(__internal_package& small_p)
+            bool con_client::__send_small(__internal_package& small_p)
             {
-                if (nt_prunt) nt_prunt("s " + std::to_string(small_p.data_len) + "B");
-                auto ret = ::send(Connected, (const char*)(&(small_p)), sizeof(__internal_package), 0);
-                if (ret) { task_send += ret; task_totl += ret; }
-                return ret > 1 ? ret == sizeof(__internal_package) : ret;
+                //if (nt_prunt) nt_prunt("s " + std::to_string(small_p.data_len) + "B");
+
+                int remaining = sizeof(__internal_package);
+                int got = 0;
+                char* ptr = (char*)&small_p;
+                while (got < remaining && got >= 0) {
+                    int res = ::send(Connected, ptr + got, remaining - got, 0); // if send partially, keep until sended all data
+                    if (res < 0) got = -1;
+                    else if (res == 0) __ploss_send();
+                    else {
+                        got += res;
+                        task_send += res;
+                        task_totl_send += res;
+                    }
+                }
+                return got != -1;
+
+                /*auto ret = ::send(Connected, (const char*)(&(small_p)), sizeof(__internal_package), 0);
+                if (ret) { task_send += ret; task_totl_send += ret; }
+                return ret > 1 ? ret == sizeof(__internal_package) : ret;*/
             }
 
-            int con_client::__recv_small(__internal_package& small_p)
+            bool con_client::__recv_small(__internal_package& small_p)
             {
-                auto ret = ::recv(Connected, (char*)&small_p, sizeof(__internal_package), 0);
-                if (nt_prunt) nt_prunt("r " + std::to_string(small_p.data_len) + "B");
-                if (ret) { task_recv += ret; task_totl += ret; }
-                return ret > 1 ? ret == sizeof(__internal_package) : ret;
+                int remaining = sizeof(__internal_package);
+                int got = 0;
+                char* ptr = (char*)&small_p;
+                while (got < remaining && got >= 0) {
+                    int res = ::recv(Connected, ptr + got, remaining - got, 0); // if send partially, keep until sended all data
+                    if (res < 0) got = -1;
+                    else if (res == 0) __ploss_recv();
+                    else {
+                        got += res;
+                        task_recv += res;
+                        task_totl_recv += res;
+                    }
+                }
+                return got != -1;
+
+
+
+                /*auto ret = ::recv(Connected, (char*)&small_p, sizeof(__internal_package), 0);
+                //if (nt_prunt) nt_prunt("r " + std::to_string(small_p.data_len) + "B");
+                if (ret) { task_recv += ret; task_totl_recv += ret;}
+                return ret > 1 ? ret == sizeof(__internal_package) : ret;*/
             }
 
             void con_client::__thr_send()
             {
                 auto handle_send = [&](__internal_package& small_p)->bool {
-                    int result = 0;
-                    do {
-                        result = __send_small(small_p);
-                        if (result == 0) {
-                                __ploss_send();
-                        }
-                        else if (result < 0) {
+                    //int result = 0;
+                   // do {
+                        if (!__send_small(small_p)) {
                             if (bw_prunt) bw_prunt("Connection failed.");
                             __set_kill();
                             return false;
                         }
-                    } while (result <= 0);
+                    //} while (result <= 0);
                     return true;
                 };
 
                 while (!kill_threads) {
-                    if (sending.size() > 0) {
+                    send_wait.wait_signal(200);
 
-                        send_wait.wait_signal();
+                    if (sending.size() > 0) {
 
                         sending_m.lock();
 
                         for (auto& pkg : sending) {
                             __internal_package small_p;
-
-                            if (!pkg) {
+                            /*
+                            if (pkg->variable_data.empty()) {
                                 if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] NULL PACKAGE SKIP!");
                                 continue;
-                            }
+                            }*/
 
                             size_t remaining = pkg->variable_data.size();
                             char* pos = pkg->variable_data.data();
@@ -172,9 +201,9 @@ namespace LSW {
                             if (remaining == 0) {
                                 small_p.combine_with_n_more = 0;
                                 small_p.data_len = 0;
+                                small_p.package_id = total_sockets_sending_only;
                                 if (!handle_send(small_p)) continue;
-                                if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] SENT N-PACKAGE #" + std::to_string(small_p.data_type) + "!");
-                                total_sockets_sr++;
+                                if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] SENT N-PACKAGE T" + std::to_string(small_p.data_type) + " #" + std::to_string(small_p.package_id) + "!");
                             }
                             else {
                                 while (remaining > 0) {
@@ -187,19 +216,19 @@ namespace LSW {
                                     memcpy_s(small_p.data, default_package_size, pos, expected);
                                     pos += expected;
                                     small_p.data_len = static_cast<int>(expected);
+                                    small_p.package_id = total_sockets_sending_only;
 
                                     if (!handle_send(small_p)) continue;                                    
 
                                     //__task_send();
                                 }
-                                if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] SENT PACKAGE #" + std::to_string(small_p.data_type) + "!");
-                                total_sockets_sr++;
-                            }
+                                if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] SENT PACKAGE T" + std::to_string(small_p.data_type) + " #" + std::to_string(small_p.package_id) + "!");
 
-                            delete pkg;
-                            pkg = nullptr;
-                            sending.erase(sending.begin());
+                            }
+                            total_sockets_sending_only++;
+                            total_sockets_sr++;
                         }
+                        sending.clear();
 
                         sending_m.unlock();
                     }
@@ -208,46 +237,44 @@ namespace LSW {
 
             void con_client::__thr_recv()
             {
-                final_package pkg;
                 auto handle_recv = [&](__internal_package& small_p)->bool {
                     int result = 0;
-                    do {
-                        result = __recv_small(small_p);
-                        if (result == 0) {
-                            __ploss_recv();
-                        }
-                        else if (result < 0) {
+                    //do {
+                        if (!__recv_small(small_p)) {
                             if (bw_prunt) bw_prunt("Connection failed.");
                             __set_kill();
                             return false;
                         }
-                    } while (result <= 0);
+                    //} while (result <= 0);
                     return true;
                 };
-                auto push = [&](final_package& pkg) {received_m.lock(); received.push_back(Tools::new_guaranteed<final_package>(pkg.variable_data, pkg.data_type)); auto siz = received.size(); received_m.unlock(); wait_recv.signal_all(); pkg.data_type = 0; pkg.variable_data.clear(); return siz; };
+                auto push = [&](std::shared_ptr<final_package>& p) {received_m.lock(); received.push_back(std::move(p)); auto siz = received.size(); received_m.unlock(); wait_recv.signal_all(); return siz; };
+
+                std::shared_ptr<final_package> pkg;
 
                 while (!kill_threads) {
 
                     __internal_package small_p;
 
-                    if (!handle_recv(small_p)) continue;
+                    if (!handle_recv(small_p)) continue;            
 
-                    if (small_p.data_len == 0) {
-                        auto cpyy = pkg.data_type;
-                        auto len = push(pkg);
-                        if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] RECEIVED N-PACKAGE #" + std::to_string(cpyy) + " [" + std::to_string(len) + " PKGS IN BUFFER]");
-                        total_sockets_sr++;
-                        continue;
-                    }               
+                    if (!pkg) {
+                        pkg = std::make_shared<final_package>();
+                        pkg->data_type = small_p.data_type;
+                    }
 
-                    if (!pkg.variable_data.size()) pkg.data_type = small_p.data_type;
-
-                    pkg.variable_data.cat(static_cast<char*>(small_p.data), small_p.data_len);
+                    pkg->variable_data.append(small_p.data, small_p.data_len);
 
                     if (small_p.combine_with_n_more == 0) {
-                        auto cpyy = pkg.data_type;
                         auto len = push(pkg);
-                        if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] RECEIVED PACKAGE #" + std::to_string(cpyy) + " [" + std::to_string(len) + " PKGS IN BUFFER]");
+                        if (nt_prunt) nt_prunt("[PKG#" + std::to_string(total_sockets_sr) + "] RECV PACKAGE T" + std::to_string(small_p.data_type) + " #" + std::to_string(small_p.package_id) + " [" + std::to_string(len) + " PKGS IN BUFFER]");
+                        if (len > max_buf) {
+                            if (nt_prunt) nt_prunt("Waiting buffer to clear a little bit...");
+                            while (received.size() > max_buf) {
+                                wait_recv.signal_all();
+                                recv_overflow_wait.wait_signal(50);
+                            }
+                        }
                         total_sockets_sr++;
                     }
 
@@ -261,31 +288,37 @@ namespace LSW {
 
                 size_t latest_end_task_recv = end_task_recv + 1;
                 size_t latest_end_task_send = end_task_send + 1;
-                size_t latest_task_totl = task_totl;
+                size_t latest_task_totl = task_totl_recv + task_totl_send;
 
                 while (!kill_threads) {
                     auto _t = (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()) - upd);
                     if (_t.count() < 1000) std::this_thread::sleep_for(std::chrono::milliseconds(1000) - _t);
                     upd = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
 
+                    // if has package, help with notif
+                    //if (sending.size()) send_wait.signal_all();
+                    //if (received.size()) wait_recv.signal_all();
+
                     end_task_recv = task_recv;
                     task_recv = 0;
                     end_task_send = task_send;
                     task_send = 0;
 
-                    if (bw_prunt && (end_task_recv != latest_end_task_recv || end_task_send != latest_end_task_send) || (latest_task_totl != task_totl)) {
-                        latest_end_task_recv = end_task_recv;
-                        latest_end_task_send = end_task_send;
-                        latest_task_totl = task_totl;
+                    if (bw_prunt) {
+                        if ((end_task_recv != latest_end_task_recv || end_task_send != latest_end_task_send) || (latest_task_totl != task_totl_recv + task_totl_send)) {
+                            latest_end_task_recv = end_task_recv;
+                            latest_end_task_send = end_task_send;
+                            latest_task_totl = task_totl_recv + task_totl_send;
 
-                        /*"▲" " ▼"*/
+                            /*"▲" " ▼"*/
 
-                        bw_prunt(
-                            std::string("^") + Tools::byteAutoString(end_task_send) + "B/s" +
-                            (end_package_loss_send > 0 ? (" PL:" + std::to_string(end_package_loss_send) + "/s") : "") +
-                            " v" + Tools::byteAutoString(end_task_recv) + "B/s" +
-                            (end_package_loss_recv > 0 ? (" PL:" + std::to_string(end_package_loss_recv) + "/s") : "") +
-                            " T" + Tools::byteAutoString(task_totl) + "B");
+                            bw_prunt(
+                                std::string("^") + Tools::byteAutoString(end_task_send) + "B/s" +
+                                (end_package_loss_send > 0 ? (" PL:" + std::to_string(end_package_loss_send) + "/s") : "") +
+                                " v" + Tools::byteAutoString(end_task_recv) + "B/s" +
+                                (end_package_loss_recv > 0 ? (" PL:" + std::to_string(end_package_loss_recv) + "/s") : "") +
+                                " T" + Tools::byteAutoString(latest_task_totl) + "B");
+                        }
                     }
                 }
             }
@@ -334,8 +367,6 @@ namespace LSW {
                     delete thr_send;
                     thr_send = nullptr;
                 }
-                for (auto& i : received) if (i) { delete i; i = nullptr; }
-                for (auto& i : sending) if (i) { delete i; i = nullptr; }
                 received.clear();
                 sending.clear();
             }
@@ -355,33 +386,53 @@ namespace LSW {
                 return sending.size();
             }
 
-            void con_client::send(final_package&& w)
+
+            void con_client::send(std::string a, const int b)
+            {
+                std::shared_ptr<final_package> pkg = std::make_shared<final_package>();
+                pkg->variable_data = a;
+                pkg->data_type = b;
+                send(pkg);
+            }
+
+            void con_client::send(std::shared_ptr<final_package> w)
             {
                 sending_m.lock();
-                sending.push_back(Tools::new_guaranteed<final_package>(w.variable_data, w.data_type));
+                sending.push_back(w); // w not useful anymore after this!!
                 sending_m.unlock();
                 send_wait.signal_all();
             }
 
-            bool con_client::recv(final_package& end, bool wait)
+            bool con_client::recv_nolock(std::shared_ptr<final_package>& end)
             {
-                if (received.size() == 0 && !wait) return false;
-                while (received.size() == 0 && wait) { wait_recv.wait_signal(connection_timeout_speed); }
-
+                if (received.size() == 0) return false;
                 received_m.lock();
-                auto& i = received[0];
-                end.data_type = i->data_type;
-                end.variable_data = i->variable_data;
-                delete i;
-                i = nullptr;
+                end = received[0];
                 received.erase(received.begin());
                 received_m.unlock();
+                recv_overflow_wait.signal_all();
                 return true;
             }
 
-            bool con_client::hadEventRightNow()
+            bool con_client::recv(std::shared_ptr<final_package>& end, const size_t wait_t)
             {
-                return ((std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()) - latest_update).count() < connection_timeout_speed);
+                if (received.size() == 0) {
+                    if (wait_t) wait_recv.wait_signal(wait_t);
+                    else wait_recv.wait_signal();
+                    if (received.size() == 0) return false;
+                }
+
+                received_m.lock();
+                end = received[0];
+                received.erase(received.begin());
+                received_m.unlock();
+                recv_overflow_wait.signal_all();
+                return true;
+            }
+
+            bool con_client::hadEventRightNow(const size_t max_t)
+            {
+                return ((std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()) - latest_update).count() < max_t);
             }
 
             void con_client::hookPrintBandwidth(std::function<void(const std::string)> f)
@@ -392,6 +443,31 @@ namespace LSW {
             void con_client::hookPrintEvent(std::function<void(const std::string)> f)
             {
                 nt_prunt = f;
+            }
+
+            size_t con_client::getSendTrafficPerSec()
+            {
+                return end_task_send;
+            }
+
+            size_t con_client::getRecvTrafficPerSec()
+            {
+                return end_task_recv;
+            }
+
+            size_t con_client::getSendTrafficTotal()
+            {
+                return task_totl_send;
+            }
+
+            size_t con_client::getRecvTrafficTotal()
+            {
+                return task_totl_recv;
+            }
+
+            size_t con_client::getTotalTraffic()
+            {
+                return task_totl_recv + task_totl_send;
             }
 
             void con_host::auto_accept()
@@ -520,7 +596,7 @@ namespace LSW {
 
                 size_t now = size();
                 if (connections.size() > 0) {
-                    if (connections.back()->hadEventRightNow()) return connections.back();
+                    if (connections.back()->hadEventRightNow(timeout ? timeout : connection_timeout_speed)) return connections.back();
                 }
                 while (connections.size() <= now) {
                     if (timeout && static_cast<size_t>(gTime() - tnow) > timeout) return nullptr;

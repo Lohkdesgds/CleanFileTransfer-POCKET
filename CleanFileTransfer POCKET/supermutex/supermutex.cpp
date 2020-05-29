@@ -8,12 +8,10 @@ namespace LSW {
 			if (locked) return false;
 			m.lock();
 			locked = true;
-			m.unlock();
 			return true;
 		}
 		void SuperMutex::weird_mtx::unlock()
 		{
-			m.lock();
 			locked = false;
 			m.unlock();
 		}
@@ -28,7 +26,7 @@ namespace LSW {
 			if (!mu.try_lock()) {
 				std::unique_lock<std::mutex> ul(defu);
 				do {
-					cond.wait_until(ul, std::chrono::system_clock::now() + std::chrono::milliseconds(100));
+					cond.wait_for(ul, std::chrono::milliseconds(100));
 				} while (!mu.try_lock());
 			}
 		}

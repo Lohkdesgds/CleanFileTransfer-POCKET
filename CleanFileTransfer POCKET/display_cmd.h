@@ -1,11 +1,15 @@
 #pragma once
 
+#include "supermutex/supermutex.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
 #include <Windows.h>
 #include <conio.h>
 #include <functional>
+
+using namespace LSW::v5;
 
 namespace Custom {
 
@@ -66,8 +70,9 @@ namespace Custom {
 
 	// const
 
-	const ULONGLONG clear_screen_at = static_cast<ULONGLONG>(10e4);
-	const unsigned max_char_update_per_frame = 30;
+	const auto clear_screen_at = std::chrono::seconds(20);
+	const unsigned max_char_update_per_frame = 300;
+	const unsigned max_delay_between_updates = 40; // ~25 fps
 
 	// class
 
@@ -77,7 +82,9 @@ namespace Custom {
 		char matrix_last[X][Y];
 		const size_t line_count = Y - 8;
 
-		ULONGLONG latest_clear = 0;
+		Waiter update_display;
+
+		std::chrono::milliseconds latest_clear = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()) - clear_screen_at;
 		std::mutex m;
 
 		std::function<std::string(void)> title_f, line_f[Y - 8];
@@ -142,6 +149,7 @@ namespace Custom {
 			setAt(x, Y - 4, '#');
 		}
 		setAt(0, Y - 5, '>');
+		update_display.signal_one();
 	}
 
 	template<size_t X, size_t Y>
@@ -151,6 +159,7 @@ namespace Custom {
 		_setTitle(str);
 		title_f = std::function<std::string(void)>();
 		m.unlock();
+		update_display.signal_one();
 	}
 
 	template<size_t X, size_t Y>
@@ -159,6 +168,7 @@ namespace Custom {
 		m.lock();
 		title_f = f;
 		m.unlock();
+		update_display.signal_one();
 	}
 
 	template<size_t X, size_t Y>
@@ -170,6 +180,7 @@ namespace Custom {
 			else setAt(p, Y - 5, ' ');
 		}
 		m.unlock();
+		update_display.signal_one();
 	}
 
 	template<size_t X, size_t Y>
@@ -184,6 +195,7 @@ namespace Custom {
 		for (int u = 0; u < getLineAmount(); u++) {
 			printAt(u, "");
 		}
+		update_display.signal_one();
 	}
 
 	template<size_t X, size_t Y>
@@ -195,6 +207,7 @@ namespace Custom {
 			_printAt(line_c, str);
 		}
 		m.unlock();
+		update_display.signal_one();
 	}
 
 	template<size_t X, size_t Y>
@@ -205,17 +218,20 @@ namespace Custom {
 			line_f[line_c] = f;			
 		}
 		m.unlock();
+		update_display.signal_one();
 	}
 
 	template<size_t X, size_t Y>
 	inline void DISPLAY<X, Y>::flip()
 	{
-		if (GetTickCount64() - latest_clear > clear_screen_at) {
-			latest_clear = GetTickCount64();
-			for (auto& i : matrix_last) for (auto& j : i) j = ' ';
-			m.lock();
-			clscmd();
-			m.unlock();
+		update_display.wait_signal(max_delay_between_updates);
+
+		if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()) - latest_clear > clear_screen_at) {
+			latest_clear = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
+			for (auto& i : matrix_last) for (auto& j : i) j = '\n';
+			//m.lock();
+			//clscmd();
+			//m.unlock();
 		}
 
 		if (title_f) {
