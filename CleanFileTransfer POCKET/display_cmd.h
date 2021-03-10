@@ -1,6 +1,6 @@
 #pragma once
 
-#include "supermutex/supermutex.h"
+#include <LSWv5.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,274 +13,84 @@ using namespace LSW::v5;
 
 namespace Custom {
 
+	void draw_color(const int, const char);
+
 	// simple tools console
 
-	void gotoxy(const int x, const int y) {
-		COORD coord;
-		coord.X = x;
-		coord.Y = y;
-		SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coord);
-	}
-	void clscmd() {
-		COORD topLeft = { 0, 0 };
-		HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
-		CONSOLE_SCREEN_BUFFER_INFO screen;
-		DWORD written;
+	void go_to_xy(const int, const int);
+	void clear_cmd();
+	void show_console_cursor(bool);
+	void disable_echo(bool);
+	int get_ch();
+	void resize_console_lock(const int, const int);
 
-		GetConsoleScreenBufferInfo(console, &screen);
-		FillConsoleOutputCharacterA(
-			console, ' ', screen.dwSize.X * screen.dwSize.Y, topLeft, &written
-		);
-		FillConsoleOutputAttribute(
-			console, FOREGROUND_GREEN | FOREGROUND_RED | FOREGROUND_BLUE,
-			screen.dwSize.X * screen.dwSize.Y, topLeft, &written
-		);
-		SetConsoleCursorPosition(console, topLeft);
-	}
-	void ShowConsoleCursor(bool showFlag)
-	{
-		HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+	template<size_t WIDTH, size_t HEIGHT>
+	class CmdDisplay {
+		Tools::char_c display_buf[2][HEIGHT][WIDTH];
+		Tools::SuperThread<> display_thr{ Tools::superthread::performance_mode::EXTREMELY_LOW_POWER };
+		size_t countdown_draws = 0;
+		
+		Tools::SuperMutex pos_draw_mtx;
+		std::vector<std::function<bool(int, int, Tools::char_c&)>> pos_draw;
+		std::vector<std::pair<size_t, std::function<void(CmdDisplay<WIDTH, HEIGHT>&)>>> pos_pos;
+		size_t pos_pos_c = 0;
 
-		CONSOLE_CURSOR_INFO     cursorInfo;
+		void _display_thread(Tools::boolThreadF);
 
-		GetConsoleCursorInfo(out, &cursorInfo);
-		cursorInfo.bVisible = showFlag; // set the cursor visibility
-		SetConsoleCursorInfo(out, &cursorInfo);
-	}
-	void disableEcho(bool disable) {
+		bool check_coord(const int y, const int x) const;
+		// y, x
+		Tools::char_c& get_char_curr(const int y, const int x);
+		// y, x
+		Tools::char_c& get_char_buf(const int y, const int x);
 
-		HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
-		DWORD mode = 0;
-		GetConsoleMode(hStdin, &mode);
-		if (disable) SetConsoleMode(hStdin, mode & (~ENABLE_ECHO_INPUT));
-		else SetConsoleMode(hStdin, mode | ENABLE_ECHO_INPUT);
-	}
-	/*int transfDoubleChar(const char a, const char b)
-	{
-		return ((int)b + ((int)a << 8));
-	}*/
-	int getCH() {
-		/*char buf[2];
-		buf[0] = _getch();
-		buf[1] = _getch();
-		return transfDoubleChar(buf[0], buf[1]);*/
-		return _getch();
-	}
-
-
-	// const
-
-	const auto clear_screen_at = std::chrono::seconds(20);
-	const unsigned max_char_update_per_frame = 300;
-	const unsigned max_delay_between_updates = 40; // ~25 fps
-
-	// class
-
-	template<size_t X, size_t Y>
-	class DISPLAY {
-		char matrix[X][Y];
-		char matrix_last[X][Y];
-		const size_t line_count = Y - 8;
-
-		Waiter update_display;
-
-		std::chrono::milliseconds latest_clear = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()) - clear_screen_at;
-		std::mutex m;
-
-		std::function<std::string(void)> title_f, line_f[Y - 8];
-
-
-		void setAt(const int, const int, const char);
-		void _setTitle(const std::string);
-		void _printAt(const int, const std::string);
+		void __first_clean();
 	public:
-		DISPLAY();
+		CmdDisplay();
+		~CmdDisplay();
 
-		void setTitle(const std::string);
-		void setTitle(const std::function<std::string(void)>);
-		void setCommandEntry(const std::string);
+		void set_window_name(const std::string&);
 
-		size_t getLineAmount();
-		void clearAllLines();
-		void printAt(const int, const std::string);
-		void printAt(const int, const std::function<std::string(void)>);
-		void flip();
+		void refresh_all_forced();
+		// y, x, string
+		void draw_at(const int, const int, const Tools::Cstring&, bool = true);
+		// char
+		void clear_all_to(const Tools::char_c);
 
-		void newMessage(const std::string);
+		void wait_for_n_draws(const size_t = 2);
+
+		// once a draw, call
+		size_t add_tick_func(std::function<void(CmdDisplay<WIDTH, HEIGHT>&)>);
+		// remove id got from add_tick_func
+		void remove_tick_func(const size_t);
+
+		// extra feature: identify them with return true if parameters match. X, Y, char& is pos' val
+		void add_drawing_func(std::function<bool(int, int, Tools::char_c&)>);
+		// if this as first param returns true, delete
+		void remove_drawing_func(int);
 	};
 
+	class UserInput {
+		mutable Tools::SuperMutex input_mtx;
+		std::string input;
+		Tools::SuperThread<> input_thread{ Tools::superthread::performance_mode::LOW_POWER };
+		std::function<void(const std::string&)> input_handle;
+		std::function<void(const std::string&)> input_keystroke;
 
-	template<size_t X, size_t Y>
-	inline void DISPLAY<X, Y>::setAt(const int x, const int y, const char c)
-	{
-		matrix[x][y] = c;
-	}
+		size_t limit_length = 0;
+		bool ignore_stokes = true;
 
-	template<size_t X, size_t Y>
-	inline void DISPLAY<X, Y>::_setTitle(const std::string str)
-	{
-		for (size_t p = 0; p < X; p++) {
-			if (p < str.length()) setAt(static_cast<int>(p), 1, str[p]);
-			else setAt(static_cast<int>(p), 1, ' ');
-		}
-	}
+		void _handle_thread(Tools::boolThreadF);
+	public:
+		UserInput();
+		~UserInput();
 
-	template<size_t X, size_t Y>
-	inline void DISPLAY<X, Y>::_printAt(const int line_c, const std::string str)
-	{
-		if (line_c < line_count && line_c >= 0) {
-			for (size_t p = 0; p < X; p++) {
-				if (p < str.length()) setAt(static_cast<int>(p), line_c + 3, str[p]);
-				else setAt(static_cast<int>(p), line_c + 3, ' ');
-			}
-		}
-	}
+		void ignore_strokes(const bool);
+		void limit_max_length(const size_t);
 
-	template<size_t X, size_t Y>
-	inline DISPLAY<X, Y>::DISPLAY()
-	{
-		for (auto& i : matrix_last) for (auto& j : i) j = ' ';
-		for (auto& i : matrix) for(auto& j : i) j = ' ';
-
-		for (int x = 0; x < static_cast<int>(X); x++)
-		{
-			setAt(x, 0, '#');
-			setAt(x, 2, '#');
-			setAt(x, Y - 4, '#');
-		}
-		setAt(0, Y - 5, '>');
-		update_display.signal_one();
-	}
-
-	template<size_t X, size_t Y>
-	inline void DISPLAY<X, Y>::setTitle(const std::string str)
-	{
-		m.lock();
-		_setTitle(str);
-		title_f = std::function<std::string(void)>();
-		m.unlock();
-		update_display.signal_one();
-	}
-
-	template<size_t X, size_t Y>
-	inline void DISPLAY<X, Y>::setTitle(const std::function<std::string(void)> f)
-	{
-		m.lock();
-		title_f = f;
-		m.unlock();
-		update_display.signal_one();
-	}
-
-	template<size_t X, size_t Y>
-	inline void DISPLAY<X, Y>::setCommandEntry(const std::string str)
-	{
-		m.lock();
-		for (int p = 2; p < static_cast<int>(X); p++) {
-			if (static_cast<size_t>(p) - 2 < str.length()) setAt(p, Y - 5, str[static_cast<size_t>(p) - 2]);
-			else setAt(p, Y - 5, ' ');
-		}
-		m.unlock();
-		update_display.signal_one();
-	}
-
-	template<size_t X, size_t Y>
-	inline size_t DISPLAY<X, Y>::getLineAmount()
-	{
-		return line_count;
-	}
-
-	template<size_t X, size_t Y>
-	inline void DISPLAY<X, Y>::clearAllLines()
-	{
-		for (int u = 0; u < getLineAmount(); u++) {
-			printAt(u, "");
-		}
-		update_display.signal_one();
-	}
-
-	template<size_t X, size_t Y>
-	inline void DISPLAY<X, Y>::printAt(const int line_c, const std::string str)
-	{
-		m.lock();
-		if (line_c < line_count && line_c >= 0) {
-			line_f[line_c] = std::function<std::string(void)>();
-			_printAt(line_c, str);
-		}
-		m.unlock();
-		update_display.signal_one();
-	}
-
-	template<size_t X, size_t Y>
-	inline void DISPLAY<X, Y>::printAt(const int line_c, const std::function<std::string(void)> f)
-	{
-		m.lock();
-		if (line_c < line_count && line_c >= 0) {
-			line_f[line_c] = f;			
-		}
-		m.unlock();
-		update_display.signal_one();
-	}
-
-	template<size_t X, size_t Y>
-	inline void DISPLAY<X, Y>::flip()
-	{
-		update_display.wait_signal(max_delay_between_updates);
-
-		if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()) - latest_clear > clear_screen_at) {
-			latest_clear = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
-			for (auto& i : matrix_last) for (auto& j : i) j = '\n';
-			//m.lock();
-			//clscmd();
-			//m.unlock();
-		}
-
-		if (title_f) {
-			std::string newt = title_f();
-			_setTitle(newt);
-		}
-		for (size_t lc = 0; lc < line_count; lc++) {
-			auto& i = line_f[lc];
-			if (i) {
-				std::string ll = i();
-				_printAt(static_cast<int>(lc), ll);
-			}
-		}
-
-		m.lock();
-
-		size_t max_changes_per_frame = 0;
-
-		for (size_t y = 0; y < Y; y++) {
-			for (size_t x = 0; x < X; x++) {
-				if (matrix_last[x][y] != matrix[x][y]) {
-					gotoxy(static_cast<int>(x), static_cast<int>(y));
-					putchar(matrix[x][y]);
-					matrix_last[x][y] = matrix[x][y];
-					if (++max_changes_per_frame == max_char_update_per_frame) {
-						m.unlock();
-						return;
-					}
-				}
-			}
-		}
-		m.unlock();
-	}
-
-	template<size_t X, size_t Y>
-	inline void DISPLAY<X, Y>::newMessage(const std::string str)
-	{
-		m.lock();
-		for (size_t y = Y - 3; y < Y - 1; y++) {
-			for (size_t x = 0; x < X; x++) {
-				matrix[x][y] = matrix[x][y+1];
-			}
-		}
-		for (size_t p = 0; p < X; p++) {
-			if (p < str.length()) setAt(static_cast<int>(p), static_cast<int>(Y) - 1, str[p]);
-			else setAt(static_cast<int>(p), Y - 1, ' ');
-		}
-		m.unlock();
-
-	}
-
+		const std::string& read_current() const;
+		void on_keystroke(const std::function<void(const std::string&)>);
+		void on_enter(const std::function<void(const std::string&)>);
+	};
 }
+
+#include "display_cmd.ipp"

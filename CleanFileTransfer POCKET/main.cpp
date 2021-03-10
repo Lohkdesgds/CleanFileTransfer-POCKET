@@ -1,3 +1,5 @@
+#define _WIN32_WINNT 0x0500
+
 #include <iostream>
 #include <stdlib.h>
 #include <stdio.h>
@@ -7,1163 +9,1306 @@
 #include <vector>
 #include <algorithm>
 
-#include "socketsystem/socketsystem.h"
-#include "filesystem/filesystem.h"
+#include <LSWv5.h>
+
 #include "display_cmd.h"
+#include "multiline_console.h"
+#include "channel_control.h"
+#include "transf_safe.h"
+//#include "tempbuffering.h"
 
-//#define LSW_DEBUG
+constexpr int WIDTH = 101;
+constexpr int HEIGHT = 30;
 
-#ifdef LSW_DEBUG
-#define DEBUG_LINES 8
-#endif
+constexpr size_t max_name_length = 30; // also channel
+constexpr size_t max_input_size = 500;
+constexpr size_t max_file_name = max_input_size;
+
+//constexpr size_t max_buffer = 20;
+//constexpr size_t package_size_each = (/*20 * */Interface::connection::maximum_package_size);
+
+constexpr size_t items_per_list = 5;
+constexpr size_t title_client_len = 20;
+
+//constexpr size_t packages_until_signal = 3;
+//constexpr size_t high_performance_cooldown = 200;
 
 using namespace LSW::v5;
 
-const std::string version_app = "CleanFileTransfer POCKET beta 0.6.1b";
-const std::string discord_link = std::string("ht") + std::string("tps://discord.gg/a5G") + "GgBt";
+const std::string version_check = "V1.0.0";
+const std::string version_app = "CleanFileTransfer Pocket " + version_check + " LSW edition";
+const std::string default_naming_top = "CFT - ";
+const std::string discord_link = std::string("ht") + std::string("tps://discord.gg/Jkz") + "JjCG";
+const std::string default_connection_url = "blackmotion.dynv6.net";
 
-enum class packages_id {VERSION_CHECK=1, MESSAGE, MESSAGE_SENT, PASSWORD_CHECK, FILE_AVAILABLE, FILE_RECEIVING, FILE_SIZE, FILE_OPEN, FILE_CLOSE, FILE_OK, FILE_NOT_OK};
+const std::string communication_version = "V1.3.2";
+
+const std::string local_prefix = "[L] ";
+const std::string server_prefix = "[S] ";
+
+const std::string empty_line (WIDTH-1, ' ');
+
+/*
+Sending | Receiving
+
+FILE_ASK_SEND >>
+<< FILE_ACCEPT_REQUEST_SEND
+FILE_TRANSFER >>
+FILE_TRANSFER_CLOSE >>
+*/
 
 
-struct user_input {
-	std::string input_going_on;
-	SuperMutex m;
-	bool die = false;
-	bool hasbreak = false;
-
-	bool isInputFull() { return hasbreak; }
-	std::string copyInput() { m.lock(); std::string cpy = input_going_on; m.unlock(); return cpy; }
-	void clsInput() { m.lock(); input_going_on.clear(); hasbreak = false; m.unlock(); }
+enum class packages_id {
+	VERSION_CHECK=1,
+	SERVER_MESSAGE,					// When a user login, or something
+	MESSAGE,						// New message. Display and return MESSAGE_RECEIVED to host [ON MESSAGE MODE]
+	MESSAGE_RECEIVED,				// The other one received. Display what you sent.			[ON MESSAGE MODE]
+	REQUEST_TYPING,					// request server typing amount
+	TYPING,							// on key stroke, send typing event
+	//SIGNAL,						// after some packages, SIGNAL will go through the server and back to self
+	SET_CHANNEL,					// Set user channel
+	SET_NICK,						// Set nickname
+	FILE_ASK_SEND,					// Who wants to send send this. Who doesn't, receive file_send_request with ID
+	FILE_ACCEPT_REQUEST_SEND,		// Send back file_send_request
+	LIST_REQUEST,					// Asks server for list on current queue
+	FILE_TRANSFER,					// Sending data
+	FILE_TRANSFER_CANCEL_NO_USER,   // Server sends this if no user is downloading files
+	FILE_TRANSFER_CLOSE				// Close file, done (SHOULD NOT HAVE DATA WITH IT)
 };
 
-// user_input saves user input
-void input_handler(user_input&);
+struct status {
+	bool quitting = false;
+	bool on_transfer = false;
+	size_t packages_transf = 0;
+	size_t packages_started_on = 0; // ref, there can be data already on going
+};
 
-// display to update
-void update_display(Custom::DISPLAY<100, 30>&, bool&);
-
-// text, limit, time to bounce, specific time to set as init, how many ticks each end
-std::string shrinkText(std::string, const size_t, const ULONGLONG, const ULONGLONG = 0, const size_t = 10);
-
-// replaces "/" to "$", "\\" to "%" and ":" to "-"
-void cleanAvoidPath(std::string&);
-
-// Automatically sends a file through the con_client. bool for message_sent, Mutex guarantee package read, Bool is for "kill" if needed, second bool is to tell you if it is working on something
-void sendFileAuto(bool&, SuperMutex&, bool&, Sockets::con_client*, std::vector<std::pair<std::string, short>>&, bool&, std::string&);
-// Handles packages. It will save messages on the vector. bool for message_sent, Mutex guarantee package read, First bool is "kill". Files are saved if second bool is true, else discarded. It dies automatically if connection dies too. Last std::string is for messages from "system"
-void handlePackages(bool&, SuperMutex&, bool&, Sockets::con_client*, bool&, std::vector<Sockets::final_package>&, std::string&);
+struct file_send_request {
+	char from[max_name_length + 1] = { 0 };
+	char filename[max_file_name + 1] = { 0 };
+	int64_t filesize = 0;
+	uintptr_t _origin_transfer = 0; // set when server redirects
+};
 
 
-int main() {
-	std::cout << "Initializing..." << std::endl;
+std::string compress(const packages_id, const std::string&);
+// superthread's thing, connection now, file (opened already please), file's mutex, packages counter++, /*signal,*/ perc, copy of file request, on trasf changer
+void send_thread(Tools::boolThreadF, Interface::Connection&, Interface::SmartFile&, Tools::SuperMutex&, size_t&,/* bool&,*/ double&, file_send_request, bool&);
 
-	user_input input;
-	Custom::DISPLAY<100, 30> display;
-	Sockets::con_host* host = nullptr;
-	Sockets::con_client* client = nullptr;
-	std::vector<std::pair<std::string,short>> items_list;
-	bool sending = false;
-	bool message_sent = false;
-	std::vector<Sockets::final_package> packages_coming;
-	bool is_file_transfer_enabled = false;
-	std::string system_message;
-	std::string internal_message;
-	SuperMutex transf_m;
-	bool always_go_back_to_debug = false;
+int as_host();
 
-#ifdef LSW_DEBUG
-	std::string lines_log[DEBUG_LINES];
-	auto log_last = [&](std::string a = "") {if (a.length() > 0) { for (int u = DEBUG_LINES - 1; u > 0; u--) lines_log[u] = lines_log[u - 1]; lines_log[0] = a; } for (size_t u = 0; u < DEBUG_LINES; u++) display.printAt(display.getLineAmount() - u - 1, lines_log[u]); };
-#endif
+int main(int argc, char* argv[]) {
 
-	std::thread thr_input([&]() { input_handler(input); });
-	std::thread thr_autorefresh([&]() { update_display(display, input.die); });
-	std::thread* thr_handle_packages = nullptr; // exists if there's a connection
-	std::thread* thr_autosend_packages = nullptr; // exists while has something to send
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * / " " " " " " " " " " " " " " " " " " " " " " " " " " " " \ * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * |                      STARTING CODE                      | * * * * * * * * * * * * * * * * * * * // 
+	// * * * * * * * * * * * * * * * * * * * \ . . . . . . . . . . . . . . . . . . . . . . . . . . . . / * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-	//thr_handle_packages = new std::thread([&]() {handlePackages(transf_m, input.die, (host ? *host->begin() : client), is_file_transfer_enabled, packages_coming, system_message); }); // if not connected, die.
-	//thr_autosend_packages = new std::thread([&]() {sendFileAuto(transf_m, input.die, (host ? *host->begin() : client), items_list, sending, system_message); });
+	std::string url = default_connection_url;
+	std::string current_channel = "PUBLIC", current_user = "";
+	size_t this_packages_total_count = 0;
+	long long last_typing_amount = 0;
+	//size_t high_performance_needed = high_performance_cooldown;
+	//bool signal_got = false;
+	std::chrono::seconds last_typing_sent = std::chrono::seconds(0);
 
-	auto handle_message = [&] {
-		if (packages_coming.size() > 0) {
-			Sockets::final_package& pkg = packages_coming[0];
-			if (pkg.data_type == static_cast<int>(packages_id::MESSAGE)) {
-				display.newMessage("[Them -> You] " + std::string(pkg.variable_data.data()));
+	double file_transf_perc = 1.0;
+
+	if (argc > 1) {
+		if (strcmp(argv[1], "--server") == 0) return as_host();
+		else url = argv[1];
+	}
+
+	// The connection, untouchable
+	Interface::Connection conn;
+	// The display, untouchable too
+	std::shared_ptr<Custom::CmdDisplay<WIDTH, HEIGHT>> display = std::make_shared<Custom::CmdDisplay<WIDTH, HEIGHT>>();
+
+	// User input, may change
+	Custom::UserInput userinput;
+
+	// Status, reference
+	status status;
+
+	Custom::MultiLiner liner;
+
+	Tools::SuperThread<> file_send_thr{Tools::superthread::performance_mode::PERFORMANCE};
+	Tools::SuperMutex file_m;
+	Interface::SmartFile file;
+	
+	file_send_request last_request;	
+
+	//conn.set_max_buffering(max_buffer);
+
+	display->set_window_name(version_app);
+
+	conn.debug_error_function([&](const std::string& err) {liner << "&c" + local_prefix + "Something bad happened: " + err; });
+	
+	// border function
+	display->add_drawing_func([](int x, int y, Tools::char_c& ch)->bool {
+		if (x == -1) return true;
+
+		if ((x % 2 == 0) && (y == 0 || y == 2 || y == (HEIGHT - 3) || y == (HEIGHT - 1))) ch = { '*', Tools::cstring::C::DARK_GRAY };
+		else if (x == 0 || x == (WIDTH - 1)) ch = { '*', Tools::cstring::C::DARK_GRAY };
+		else if (x == 2 && y == (HEIGHT - 2)) ch = { '>', Tools::cstring::C::BLUE };
+
+		return false;
+	});
+
+	// Title update
+	display->add_tick_func([&](Custom::CmdDisplay<WIDTH, HEIGHT>& thus) {
+
+		unsigned doublesecs = ((std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() / 333) % 20);
+		bool on = !(doublesecs % 2 == 1 && doublesecs < 8);
+
+		std::string transl_title;
+
+		if (status.quitting) {
+			transl_title = "Exiting the app...";
+		}
+		else if (status.on_transfer) {
+			transl_title = "Transfering data...";
+		}
+		else if (conn.is_connected()) {
+			transl_title = "Connected";
+		}
+		else {
+			transl_title = "Standby";
+		}
+
+		thus.draw_at(1, 2,
+			Tools::sprintf_a("&f%-*s &8| &3%c &a%sB &b%.3lf%c &8| &3^&a%sB &3v&a%sB &8| &3W^%03.0lf%% &7%s %s",
+				title_client_len, transl_title.substr(0, title_client_len).c_str(),
+				/*max_name_length, (current_channel.empty() ? "PUBLIC" : current_channel).c_str(),*/
+				file.is_open() ? ((file_m.is_locked()) ? 'L' : '%') : '.',
+				Tools::byte_auto_string(this_packages_total_count).c_str(),
+				(file_transf_perc > 1.0 ? 1.0 : file_transf_perc) * 100.0, '%',
+				Tools::byte_auto_string(conn.get_network_info().send_get_total()).c_str(),
+				Tools::byte_auto_string(conn.get_network_info().recv_get_total()).c_str(),
+				(conn.buffer_sending_load() * 100.0),
+				(last_typing_amount ? (std::to_string(last_typing_amount) + " typing...") : "").c_str(),
+				empty_line.c_str()
+			), false);
+
+	});
+
+	// set already feedback
+	userinput.on_keystroke([&, display](const std::string& str) {
+
+		//const auto max_len = WIDTH - 6;
+		//display->draw_at((HEIGHT - 2), 4, str.substr(str.length() > max_len ? str.length() - max_len : 0, max_len) + empty_line);
+
+		display->draw_at((HEIGHT - 2), 4, str + ' ');
+
+		if (conn.is_connected() && std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()) - last_typing_sent >= (Custom::time_typing_limit - std::chrono::seconds(1))) {
+			last_typing_sent = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch());
+			conn.send_package(compress(packages_id::TYPING, ""));
+		}
+	});
+	userinput.limit_max_length(max_input_size);
+	
+
+	liner.set_line_amount(HEIGHT - 7);
+	liner.set_line_width_max(WIDTH - 2);
+	liner.set_func_draw([&,display](int py, const Tools::Cstring& str) {
+		//display->draw_at(py + 3, 1, empty_line);
+		display->draw_at(py + 3, 1, str);
+	});
+
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * / " " " " " " " " " " " " " " " " " " " " " " " " " " " " \ * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * |                  CONNECTING TO SERVER                   | * * * * * * * * * * * * * * * * * * * // 
+	// * * * * * * * * * * * * * * * * * * * \ . . . . . . . . . . . . . . . . . . . . . . . . . . . . / * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+	{
+		liner << local_prefix + ("Starting app, please wait...");
+
+		if (conn.connect(url.c_str())) {
+
+			Interface::Package get;
+
+			while (conn.is_connected()) {
+				liner << local_prefix + ("Connected. Verifying version...");
+				conn.send_priority_package(compress(packages_id::VERSION_CHECK, communication_version));
+
+				if (!conn.wait_for_package(std::chrono::milliseconds(10000))) {
+					if (!conn.has_package()) continue;
+				}
+
+				get = conn.get_next();
+
+				if (get.small_data.c_str()[0] != static_cast<char>(packages_id::VERSION_CHECK)) {
+					liner << local_prefix + ("Failed to check version. Trying again...");
+				}
+				else break;
 			}
-			packages_coming.erase(packages_coming.begin());
-		}
-	};
+						
 
-	display.setTitle([&]() {
-		std::string buf = version_app + " | L: " + (system_message.length() > 0 ? system_message : "none") + " I: " + (internal_message.length() > 0 ? internal_message : "none") + " ";
-		if (host) {
-			size_t connected = 0;
-			for (auto& i : *host) {
-				connected += i->isConnected();
+			if (!conn.is_connected()) {
+				liner << local_prefix + ("Lost connection. Please try again.");
+				status.quitting = true;
+				display->wait_for_n_draws(1);
 			}
-			buf += "| C/T: " + std::to_string(connected) + "/" + std::to_string(host->size());
+
+			// sure it is VERSION_CHECK
+			if (get.small_data.c_str() + 1 != communication_version) {
+				liner << local_prefix + ("Version mismatch. Host or client not up to date.");
+				status.quitting = true;
+				display->wait_for_n_draws(1);
+			}
+			else {
+				liner << local_prefix + ("Connected to host successfully.");
+				display->wait_for_n_draws(1);
+
+				liner << local_prefix + ("Please type your name and press ENTER");
+
+				{
+					std::string ident;
+
+					bool wait = true;
+					userinput.ignore_strokes(false);
+					userinput.on_enter([&, display](const std::string& str) {
+						if (!str.empty()) {
+							ident = str.substr(0, max_name_length);
+							wait = false;
+							userinput.ignore_strokes(true);
+						}
+					});
+
+					while (wait) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(250));
+						std::this_thread::yield();
+					}
+
+					conn.send_package(compress(packages_id::SET_NICK, ident));
+
+					liner << local_prefix + ("You'll be known as '" + ident + "&f' in this session.");
+					liner << local_prefix + ("Type '/help' if you don't know what to do.");
+
+					current_user = ident;
+					display->set_window_name(version_app + " | " + current_user + " @ " + current_channel);
+
+					// enable user interaction
+
+					display->refresh_all_forced();
+					display->clear_all_to({ ' ' });
+					//liner.force_update();
+				}
+			}
 		}
-		if (client) {
-			buf += "| C ";
-			if (client->isConnected()) buf += "ON";
-			else buf += "OFF";
+		else {
+			liner << local_prefix + ("Could not connect to " + url + ".");
+			if (url == default_connection_url) liner << local_prefix + ("Please check for IPV6 connection.");
+			liner << local_prefix + ("Please try again later or try calling the app with a custom IP (<this.exe> <ip>).");
+			status.quitting = true;
+			display->wait_for_n_draws(1);
 		}
-		buf += " | Items: " + std::to_string(items_list.size());
+	}
 
-		return shrinkText(buf, 100, 200);
-		});
 
-	display.printAt(0, "[@] Hello! Start with 'help' if you don't have any idea how this app works.");
-		
-	bool clear_input_waiting = false;
-	std::string last_input = "";
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * / " " " " " " " " " " " " " " " " " " " " " " " " " " " " \ * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * |                    USER INPUT HANDLE                    | * * * * * * * * * * * * * * * * * * * // 
+	// * * * * * * * * * * * * * * * * * * * \ . . . . . . . . . . . . . . . . . . . . . . . . . . . . / * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-	for (bool dead = false; !dead;) {
-#ifdef LSW_DEBUG
-		log_last();
-#endif
 
-		Sleep(150);
+	// Setup input handling	
+	userinput.on_enter([&,display](const std::string& str) {
 
-		handle_message();
-
-		if (input.copyInput() != last_input) {
-			last_input = input.copyInput();
-			display.setCommandEntry(input.copyInput());
-			//display.flip();
+		std::unordered_map<size_t, std::string> processed;
+		{
+			std::string buf;
+			size_t argp = 0;
+			for (auto& i : str) {
+				if (i != ' ') buf += i;
+				else if (!buf.empty()) processed.emplace(argp++, std::move(buf));
+			}
+			if (!buf.empty()) processed.emplace(argp++, std::move(buf));
 		}
 
-		if (input.isInputFull()) {
-			std::string buf = input.copyInput();
-			clear_input_waiting = true; // input.clsInput(); later is 10/10
+		if (processed[0] == "/help") {
+			liner << local_prefix + ("List of commands available in this version:");
+			liner << local_prefix + ("&e/help                    &7| &fShows this help");
+			liner << local_prefix + ("&e/quit                    &7| &fClose the app entirely");
+			liner << local_prefix + ("&e/ping                    &7| &fShows current ping");
+			liner << local_prefix + ("&e/nick <new name>         &7| &fChange your nickname");
+			liner << local_prefix + ("&e/channel [channel_name]  &7| &fChange the channel you're in (no space). Empty for PUBLIC.");
+			liner << local_prefix + ("&e/version                 &7| &fShows current version and other information");
+			liner << local_prefix + ("&e/discord                 &7| &fShows from what Discord server this is from");
+			liner << local_prefix + ("&e/message [message]       &7| &fGo to message mode and send [message] (optional)");
+			liner << local_prefix + ("&e/list <page>             &7| &fAsks server who is waiting for /sendnow");
+			liner << local_prefix + ("&e/send <short file path>  &7| &fTry to send file on channel (STRING PATH MAX SIZE: " + std::to_string(max_input_size) + ")");
+			liner << local_prefix + ("&e/sendnow                 &7| &fIf someone accepted, start sending file now");
+			liner << local_prefix + ("&e/close                   &7| &fTry to cancel and close any stuff going on + cleanup");
+			liner << local_prefix + ("&e/receive                 &7| &fAccept someone sending file request on channel");
+			liner << local_prefix + ("&e/debug                   &7| &fFull connection information");
+			liner << local_prefix + ("&e<any text>               &7| &fGo to message mode and send a message");
+		}
+		else if (processed[0] == "/quit")
+		{
+			liner << local_prefix + ("Exiting the app...");
+			status.quitting = true;
+			userinput.ignore_strokes(true);
+		}
+		else if (processed[0] == "/ping")
+		{
+			liner << local_prefix + ("Your ping: " + std::to_string(conn.get_network_info().ping_now()) + " ms");
+		}
+		else if (processed[0] == "/debug")
+		{
+			const auto& net = conn.get_network_info();
+			liner << local_prefix + "&2-&a ping_now:         &f" + std::to_string(net.ping_now()) + "&7 ms";
+			liner << local_prefix + "&2-&a ping_peak:        &f" + std::to_string(net.ping_peak()) + "&7 ms";
+			liner << local_prefix + "&2-&a ping_average:     &f" + std::to_string(net.ping_average_now()) + "&7 ms";
+			liner << local_prefix + "&2-&a send_total:       &f" + Tools::byte_auto_string(net.send_get_total(), 3, "&7") + "&7B";
+			liner << local_prefix + "&2-&a send_peak:        &f" + Tools::byte_auto_string(net.send_get_peak(), 3, "&7") + "&7B in one second";
+			liner << local_prefix + "&2-&a send_bps_now:     &f" + Tools::byte_auto_string(net.send_get_current_bytes_per_second(), 3, "&7") + "&7B/s";
+			liner << local_prefix + "&2-&a send_bps_alltime: &f" + Tools::byte_auto_string(net.send_get_average_total(), 3, "&7") + "&7B/s";
+			liner << local_prefix + "&2-&a recv_total:       &f" + Tools::byte_auto_string(net.recv_get_total(), 3, "&7") + "&7B";
+			liner << local_prefix + "&2-&a recv_peak:        &f" + Tools::byte_auto_string(net.recv_get_peak(), 3, "&7") + "&7B in one second";
+			liner << local_prefix + "&2-&a recv_bps_now:     &f" + Tools::byte_auto_string(net.recv_get_current_bytes_per_second(), 3, "&7") + "&7B/s";
+			liner << local_prefix + "&2-&a recv_bps_alltime: &f" + Tools::byte_auto_string(net.recv_get_average_total(), 3, "&7") + "&7B/s";
+		}
+		else if (processed[0] == "/nick")
+		{
+			
+			if (processed[1].empty()) {
+				liner << local_prefix + ("Failed to set new nickname.");
+			}
+			else {
 
-			std::vector<std::string> splut;
+				std::string combo;
+				for (size_t p = 1; p < processed.size(); p++) combo += processed[p] + " ";
+				if (combo.size()) combo.pop_back();
+
+				if (!combo.empty()) {
+					liner << local_prefix + ("Nickname update request to '" + combo + "&f' has been sent to the server.");
+
+					conn.send_package(compress(packages_id::SET_NICK, combo));
+
+					current_user = combo;
+					display->set_window_name(version_app + " | " + current_user + " @ " + current_channel);
+				}
+				else {
+
+					liner << local_prefix + ("Failed to set new nickname.");
+				}
+			}
+		}
+		else if (processed[0] == "/channel")
+		{
+
+			if (processed[1] == "") processed[1] = "PUBLIC"; // null is PUBLIC.
+
+			processed[1] = processed[1].substr(0, max_name_length);
+
+			liner.clear();
+			display->refresh_all_forced();
+			display->clear_all_to({ ' ' });
+			
+			conn.send_package(compress(packages_id::SET_CHANNEL, processed[1]));
+
+			current_channel = processed[1];
+
+			if (current_channel.empty()) {
+				current_channel = "PUBLIC";
+				liner << local_prefix + ("You're on PUBLIC channel (no ID channel)");
+			}
+			else {
+				liner << local_prefix + ("You're on &f" + processed[1] + "&f channel now.");
+			}
+			display->set_window_name(version_app + " | " + current_user + " @ " + current_channel);
+		}
+		else if (processed[0] == "/version")
+		{
+			liner << local_prefix + ("App info: " + version_app);
+			liner << local_prefix + ("Developed by: Lohkdesgds");
+		}
+		else if (processed[0] == "/discord")
+		{
+			liner << local_prefix + ("Discord link: " + discord_link);
+		}
+		else if (processed[0] == "/message")
+		{
+			if (!processed[1].empty()) {
+				std::string combo;
+				for (size_t p = 1; p < processed.size(); p++) combo += processed[p] + " ";
+				if (combo.size()) combo.pop_back();
+
+				if (!combo.empty()) {
+					conn.send_priority_package(compress(packages_id::MESSAGE, combo.substr(0, max_input_size)));
+				}
+			}
+		}
+		else if (processed[0] == "/list")
+		{
+			conn.send_package(compress(packages_id::LIST_REQUEST, processed[1]));
+		}
+		else if (processed[0] == "/send")
+		{
+			/*
+			Sending | Receiving
+
+			FILE_ASK_SEND >>
+			<< FILE_ACCEPT_REQUEST_SEND (receiver open file and wait)
+			FILE_TRANSFER >> (sender open file and thread to send)
+			FILE_TRANSFER_CLOSE >> (receiver close)
+			*/
+			if (status.on_transfer) {
+				liner << local_prefix + ("It looks like you're on a transfer already. Cancel with /close?");
+				return;
+			}
+			if (file_m.is_locked()) {
+				liner << local_prefix + ("The file seems to be locked now. Try again later?");
+				return;
+			}
+
+			if (file.is_open())
 			{
-				bool dont_divide_space = false;
-				std::string last_buf;
-				for (auto& i : buf) {
-					if (i == '\"') {
-						dont_divide_space = !dont_divide_space;
-					}
-					else if ((i != ' ' || dont_divide_space) && i != '\n') {
-						last_buf += i;
-					}
-					else {
-						if (last_buf.length() > 0) splut.push_back(last_buf);
-						last_buf.clear();
-					}
+				liner << local_prefix + ("You have a file open. Do you want to force /close it so you can open /send?");
+				liner << local_prefix + ("/close will kill any task in progress.");
+			}
+			else if (!processed[1].empty()) {
+				
+				Tools::AutoLock l(file_m);
+
+				std::string combo;
+				for (size_t p = 1; p < processed.size(); p++) combo += processed[p] + " ";
+				if (combo.size()) combo.pop_back();
+
+				liner << local_prefix + ("Checking '" + combo + "'...");
+
+				sprintf_s(last_request.filename, "%s", combo.c_str());
+
+				if (!file.open(last_request.filename, Interface::smartfile::file_modes::READ)) {
+					liner << local_prefix + ("Could not open this file. Please check incomplete or wrong path.");
+					last_request = file_send_request{};
 				}
-				if (last_buf.length() > 0) splut.push_back(last_buf);
+				else {
+					last_request.filesize = file.total_size();
+					liner << local_prefix + ("File is now open and ready.");
+					conn.send_package(compress(packages_id::FILE_ASK_SEND, Interface::transform_any_to_package(&last_request, sizeof(file_send_request))));
+				}
+			}
+			else
+			{
+				liner << local_prefix + ("Empty path?! Do '/send <filename>'");
+			}
+		}
+		else if (processed[0] == "/sendnow")
+		{
+			if (file_m.is_locked()) {
+				liner << local_prefix + ("The file seems to be locked now. Try again later?");
+				return;
 			}
 
-			// handle
+			{
+				Tools::AutoLock l(file_m);
 
-			if (splut.size() > 0) {
-
-				std::string cmd = splut[0];
-
-				display.clearAllLines();
-
-				if (cmd == "help" || cmd == "h") {
-
-					if (splut.size() == 1) {
-						display.printAt(0, "[@] Help:");
-						display.printAt(1, "These are the commands available to use: (try also 'help <any>')");
-						display.printAt(2, "- host: start con_host;");
-						display.printAt(3, "- connect: start con_client;");
-						display.printAt(4, "- add: adds new item to the list to transfer;");
-						display.printAt(5, "- del: removes an item from the list to transfer;");
-						display.printAt(6, "- show: shows the list to transfer;");
-						display.printAt(7, "- receivefiles: set to receive the files;");
-						display.printAt(8, "- sendfiles: put the files from the list to transfer;");
-						display.printAt(9, "- message: sends a message;");
-						display.printAt(10, "- version: shows the version of the app;");
-						display.printAt(11, "- discord: shows main discord server link;");
-						display.printAt(12, "- tutorial: shows a tutorial if you don't know what to do;");
-						display.printAt(13, "- exit: exits the app.");
-						display.printAt(13, "- credits: shows credits.");
-					}
-					else { // expanded help
-
-						std::string what_to_help = splut[1];
-
-						display.printAt(0, "[@] Help to '" + what_to_help + "':");
-
-						if (what_to_help == "help") {
-							display.printAt(1, "Help is an useful command to get help of things you can do here.");
-							display.printAt(2, "You can also get more detailed help by using 'help' and the command you want help.");
-							display.printAt(3, "You are crazy searching for help to help...");
-							display.printAt(9, "Command args: 'help <command>'");
-						}
-						else if (what_to_help == "host") {
-							display.printAt(1, "Host turns on the 'Host' part of the app, also known as 'server'.");
-							display.printAt(2, "If you enable the Host part, someone can connect to your computer.");
-							display.printAt(3, "If you want to connect to someone that has hosted, use 'connect' instead.");
-							display.printAt(9, "Command args: 'host [password] <ipv6>'");
-						}
-						else if (what_to_help == "connect") {
-							display.printAt(1, "Connect is the command to connect to someone hosting.");
-							display.printAt(2, "Someone can host a server by using the 'host' command.");
-							display.printAt(9, "Command args: 'connect [ip] [password]'");
-						}
-						else if (what_to_help == "add") {
-							display.printAt(1, "Adds a new item to the sending list.");
-							display.printAt(2, "You can actually DROP the file here (it copies the path for you).");
-							display.printAt(9, "Command args: 'add [path]'");
-							display.printAt(10, "Alias: 'a'");
-						}
-						else if (what_to_help == "del") {
-							display.printAt(1, "Removes an item from the sending list.");
-							display.printAt(9, "Command args: 'del [item(number)]'");
-							display.printAt(10, "Alias: 'd'");
-						}
-						else if (what_to_help == "show") {
-							display.printAt(1, "Shows the 'sending list' itself.");
-							display.printAt(9, "Command args: 'show <page>'");
-							display.printAt(10, "Alias: 's'");
-						}
-						else if (what_to_help == "receivefiles") {
-							display.printAt(1, "Toggles if automatic file receive is available or not.");
-							display.printAt(2, "You can force 'disabled' or 'enabled' if you want.");
-							display.printAt(2, "If enabled, files sent to you will be saved next to this app.");
-							display.printAt(10, "Alias: 'rf'");
-						}
-						else if (what_to_help == "sendfiles") {
-							display.printAt(1, "Start to upload files to whoever is connected (if they are accepting files).");
-							display.printAt(10, "Alias: 'sf'");
-						}
-						else if (what_to_help == "message") {
-							display.printAt(1, "Sends a message to whoever is connected on the other side.");
-							display.printAt(9, "Command args: 'message <text string>'");
-							display.printAt(10, "Alias: 'm'");
-						}
-						else if (what_to_help == "version") {
-							display.printAt(1, "Shows app version.");
-						}
-						else if (what_to_help == "discord") {
-							display.printAt(1, "Shows the server link where you can get help and chat.");
-						}
-						else if (what_to_help == "tutorial") {
-							display.printAt(1, "Shows a little simple tutorial on how to send a file to your friend.");
-							display.printAt(2, "If you don't have any idea how this app works, this might help.");
-						}
-						else if (what_to_help == "exit") {
-							display.printAt(1, "Exits the app.");
-						}
-						else {
-							display.printAt(1, "Sorry, I could not find any command like that. Try something like 'help message'.");
-						}
-					}
+				if (status.on_transfer) {
+					liner << local_prefix + ("You have a file transfer going on yet. Do you want to force /close it? (/close)");
+					liner << local_prefix + ("/close will kill any task in progress.");
 				}
-				else if (cmd == "host") { // host [password] <ipv6>
-
-					if (splut.size() == 1) {
-						display.printAt(0, "[@] Host:");
-						display.printAt(1, "You need a password to host! (try 'help host')");
-					}
-					else {
-
-						bool ipv6 = false;
-						if (splut.size() > 2) ipv6 = ([](std::string s) { std::for_each(s.begin(), s.end(), std::tolower); return s; }(splut[2]) == "ipv6");
-
-						std::string password = splut[1];
-
-						display.printAt(0, "[@] Host " + std::string(ipv6 ? "IPV6" : "IPV4") + ":");
-						display.printAt(1, "Startint host with password " + password + "...");
-
-						// create host
-						int line = 2;
-
-						if (client) {
-							display.printAt(line++, "You were as client. Cleaning up client...");
-							delete client;
-							client = nullptr;
-						}
-
-						if (host) {
-							host->setMaxConnections(1);
-							for (auto& i : *host) {
-								i->kill();
-							}				
-						}
-						else {
-							host = Tools::new_guaranteed<Sockets::con_host>(ipv6);
-							host->setMaxConnections(1);
-						}
-
-						input.clsInput();
-						display.setCommandEntry("");
-
-						display.printAt(line++, "Waiting for new connection... (type anything to stop and cancel or wait 120 sec)");
-
-						Sockets::con_client* i = nullptr;
-
-						for (size_t u = 0; u < 120 && !i; u++) {
-							if (input.copyInput().length() > 0) {
-								display.printAt(line++, "Got input, end...");
-								host->setMaxConnections(0);
-								for (auto& i : *host) i->kill();
-								break;
-							}
-							i = host->waitNewConnection(1000);
-						}
-
-						auto assert_con = [&](bool f) {
-							if (!f) {
-								if (i) i->kill();
-								input.clsInput();
-								display.setCommandEntry("");
-							}
-							return f;
-						};
-
-						if (i) {
-							display.printAt(line++, "Connected!");
-
-							i->hookPrintBandwidth([&](std::string nm) { internal_message = nm; });
-#ifdef LSW_DEBUG
-							i->hookPrintEvent([&](std::string ev) {log_last(ev); });
-#endif
-
-							i->send(version_app, static_cast<int>(packages_id::VERSION_CHECK));
-
-							std::shared_ptr<Sockets::final_package> pkg1, pkg2;
-
-							display.printAt(line++, "Verifying version and password...");
-
-							if (!assert_con(i->recv(pkg1, 2000))) continue; // should be version
-							if (!assert_con(i->recv(pkg2, 2000))) continue; // should be password
-							{
-								bool failed = false;
-								if (failed |= (pkg1->data_type != static_cast<int>(packages_id::VERSION_CHECK))) {
-									display.printAt(line++, "The package ordering was not right... Version not found.");
-								}
-								if (failed |= (pkg2->data_type != static_cast<int>(packages_id::PASSWORD_CHECK))) {
-									display.printAt(line++, "The package ordering was not right... Password could not be verified.");
-								}
-								if (failed) {
-									assert_con(false);
-									continue;
-								}
-							}
-
-							// VERSION STRING
-
-							if (pkg1->variable_data != version_app) {
-								display.printAt(line++, "Version not supported!");
-								i->kill();
-								input.clsInput();
-								display.setCommandEntry("");
-								continue;
-							}
-
-							// STRING PASSWORD
-							if (password.compare(0, password.size(), pkg2->variable_data, 4, password.size() + 4) == 0) {
-								display.printAt(line++, "Password match!");
-								i->send("OK", static_cast<int>(packages_id::PASSWORD_CHECK));
-							}
-							else {
-								display.printAt(line++, "Password failed!");
-								i->kill();
-								input.clsInput();
-								display.setCommandEntry("");
-								continue;
-							}
-
-							if (thr_handle_packages) {
-								display.printAt(line++, "Cleaning up old connection stuff first...");
-								thr_handle_packages->join();
-								delete thr_handle_packages;
-							}
-							thr_handle_packages = Tools::new_guaranteed<std::thread>([&, i]() {handlePackages(message_sent, transf_m, input.die, i, is_file_transfer_enabled, packages_coming, system_message); }); // if not connected, die.
-
-							display.printAt(line++, "[!] Up and running!");
-						}
-
-						else {
-							host->setMaxConnections(0);
-							display.printAt(line++, "Time out or user input! Not accepting connections anymore.");
-							assert_con(false);
-						}
-
-					}
+				else if (strnlen_s(last_request.filename, max_file_name) <= 0) {
+					liner << local_prefix + ("It seems that there's no file to send...?");
 				}
-				else if (cmd == "connect") { // connect [ip] [password]
-
-					if (splut.size() <= 2) {
-						display.printAt(0, "[@] Connect:");
-						display.printAt(1, "You need an IP and a password to connect! (try 'help connect')");
-					}
-					else {
-						std::string ip = splut[1];
-						std::string pw = splut[2];
-
-						display.printAt(0, "[@] Connect:");
-						display.printAt(1, "Trying to connect to " + ip + "...");
-
-						// connect
-						int line = 2;
-
-						if (client) {
-							display.printAt(line++, "Detected a connection already in memory, cleaning up...");
-							client->kill();
-							display.printAt(line++, "Ready, trying to connect...");
-							delete client;
-						}
-
-						if (host) {
-							display.printAt(line++, "You were as host. Cleaning up host...");
-							delete host;
-							host = nullptr;
-						}
-
-						client = Tools::new_guaranteed<Sockets::con_client>();
-						client->hookPrintBandwidth([&](std::string nm) {internal_message = nm; });
-#ifdef LSW_DEBUG
-						client->hookPrintEvent([&](std::string ev) {log_last(ev); });
-#endif
-
-						auto assert_con = [&](bool f) {
-							if (!f) {
-								if (client) client->kill();
-								input.clsInput();
-								display.setCommandEntry("");
-							}
-							return f;
-						};
-
-						if (client->connect(ip.c_str())) {
-							display.printAt(line++, "Connected! Verifying...");
-
-							int rnd = GetTickCount64() % 1000 + 2000;
-
-							client->send(version_app, static_cast<int>(packages_id::VERSION_CHECK));
-							client->send(std::to_string(rnd) + pw, static_cast<int>(packages_id::PASSWORD_CHECK));
-
-							std::shared_ptr<Sockets::final_package> pkg1, pkg2;
-
-							if (!assert_con(client->recv(pkg1, 2000))) continue; // should be version
-							if (!assert_con(client->recv(pkg2, 2000))) continue; // should be password
-							{
-								bool failed = false;
-								if (failed |= (pkg1->data_type != static_cast<int>(packages_id::VERSION_CHECK))) {
-									display.printAt(line++, "The package ordering was not right... Version not found.");
-								}
-								if (failed |= (pkg2->data_type != static_cast<int>(packages_id::PASSWORD_CHECK))) {
-									display.printAt(line++, "The package ordering was not right... Password could not be verified.");
-								}
-								if (failed){
-									assert_con(false);
-									continue;
-								}
-							}
-
-							// VERSION STRING
-
-							if (pkg1->variable_data != version_app) {
-								display.printAt(line++, "Version not supported!");
-								client->kill();
-								input.clsInput();
-								display.setCommandEntry("");
-								continue;
-							}
-
-							// STRING PASSWORD
-
-							if (pkg2->variable_data == "OK") {
-								display.printAt(line++, "Password match!");
-							}
-							else {
-								display.printAt(line++, "Password failed!");
-								client->kill();
-								input.clsInput();
-								display.setCommandEntry("");
-								continue;
-							}
-
-							if (thr_handle_packages) {
-								display.printAt(line++, "Cleaning up old connection stuff first...");
-								thr_handle_packages->join();
-								delete thr_handle_packages;
-							}
-							thr_handle_packages = Tools::new_guaranteed<std::thread>([&, client]() {handlePackages(message_sent, transf_m, input.die, client, is_file_transfer_enabled, packages_coming, system_message); }); // if not connected, die.
-
-							display.printAt(line++, "[!] Up and running!");
-						}
-						else {
-							display.printAt(line++, "Failed to connect!");
-							assert_con(false);
-						}
-					}
-				}
-				else if (cmd == "add" || cmd == "a") {
-					if (sending) {
-						display.printAt(0, "[@] Add:");
-						display.printAt(1, "Please wait for the transfer to end!");
-					}
-					else if (splut.size() == 1) {
-						display.printAt(0, "[@] Add:");
-						display.printAt(1, "If you want to add something, do 'add <something>'! (try 'help add')");
-					}
-					else {
-						std::string toadd = splut[1];
-						display.printAt(0, "[@] Add:");
-						display.printAt(1, "Analysing file...");
-
-						/*if (size_t sizz = toadd.length(); sizz > 1) {
-							if (toadd[0] == '\"' && toadd[sizz - 1] == '\"') {
-								toadd.pop_back();
-								toadd = toadd.substr(1);
-							}
-						}*/
-
-						auto size = Tools::getFileSize(toadd);
-
-						if (size > 0) {
-							bool canadd = true;
-							for (auto& i : items_list) canadd &= (i.first != toadd);
-							if (canadd) {
-								items_list.push_back({ toadd, 0 });
-								display.printAt(2, "Added file with " + std::to_string(size) + " bytes!");
-							}
-							else {
-								display.printAt(2, "Item already in list!");
-							}
-						}
-						else {
-							display.printAt(2, "Invalid file!");
-						}
-					}
-				}
-				else if (cmd == "del" || cmd == "d") {
-					if (sending) {
-						display.printAt(0, "[@] Del:");
-						display.printAt(1, "Please wait for the transfer to end!");
-					}
-					else if (splut.size() == 1) {
-						display.printAt(0, "[@] Del:");
-						display.printAt(1, "If you want to del something, do 'del <item number>'! (try 'help del')");
-					}
-					else {
-						display.printAt(0, "[@] Del " + splut[1] + ":");
-
-						size_t itemid;
-						if (sscanf_s(splut[1].c_str(), "%zu", &itemid)) {
-							if (itemid < items_list.size()) {
-								std::string what_del = items_list[itemid].first;
-								items_list.erase(items_list.begin() + itemid);
-								display.printAt(1, "Removed: " + what_del);
-							}
-							else {
-								display.printAt(1, "Out of range. Are you sure about this number?");
-							}
-						}
-						else {
-							display.printAt(1, "This number seems invalid. Please try again.");
-						}
-					}
-
-				}
-				else if (cmd == "show" || cmd == "s") { // show <page>					
-					int limit = static_cast<int>(display.getLineAmount()) - 1;
-					int pagemax = 1 + (static_cast<int>(items_list.size()) + 1) / limit;
-					int from = 0;
-					if (splut.size() > 1) {
-						if (!sscanf_s(splut[1].c_str(), "%d", &from)) {
-							from = 0;
-						}
-						else if (from > 0){
-							from--;
-						}
-					}
-
-					display.printAt(0, "[@] Show [" + std::to_string(from + 1) + "/" + std::to_string(pagemax) + "]:");
-
-					for (int start = 0; start < limit; start++) {
-						int itemid = start + from * limit;
-						if (itemid < items_list.size()) {
-							std::string cpyy = items_list[itemid].first;
-							short progress = items_list[itemid].second;
-							auto t = GetTickCount64();
-							display.printAt(start + 1, [=]() {return shrinkText("#" + std::to_string(itemid) + (progress != 0 ? (" [" + std::to_string(progress) + "%]") : "") + ": " + cpyy, 100, 250, t); });
-						}
-					}
-				}
-				else if (cmd == "receivefiles" || cmd == "rf") {
-					display.printAt(0, "[@] ReceiveFiles:");
-
-					if (splut.size() > 1) {
-						if (splut[1] == "disable") {
-							is_file_transfer_enabled = false;
-						}
-						else if (splut[1] == "enable") {
-							is_file_transfer_enabled = true;
-						}
-					}
-					else is_file_transfer_enabled = !is_file_transfer_enabled;
-
-					display.printAt(1, "Now you " + std::string((is_file_transfer_enabled ? "CAN" : "CANNOT")) + " receive new files.");
-				}
-				else if (cmd == "sendfiles" || cmd == "sf") {
-					display.printAt(0, "[@] SendFiles:");
-
-					int line = 1;
-
-					if (sending) {
-						display.printAt(line++, "Please wait the task to be done before doing it again!");
-					}
-					else {
-						if (thr_autosend_packages) {
-							display.printAt(line++, "Cleaning up last task...");
-							thr_autosend_packages->join();
-							delete thr_autosend_packages;
-						}
-						display.printAt(line++, "Initializing thread to send...");
-
-						thr_autosend_packages = Tools::new_guaranteed<std::thread>([&]() {sendFileAuto(message_sent, transf_m, input.die, (host ? *host->begin() : client), items_list, sending, system_message); });
-
-						display.printAt(line++, "Sending files!");
-					}
-					
-				}
-				else if (cmd == "message" || cmd == "m") {
-					display.printAt(0, "[@] Message:");
-
-					if ((host || client) && splut.size() > 1) {
-						Sockets::con_client* the_client = client;
-						if (host) {
-							if (host->size() > 0) {
-								the_client = *host->begin();
-							}
-						}
-
-						if (!the_client)
-						{
-							display.printAt(1, "You are not connected!");
-						}
-						else if (!the_client->isConnected()) {
-							display.printAt(1, "Sorry, but the connection got down!");
-						}
-						else {
-							std::string to_send;
-							for (size_t p = 1; p < splut.size(); p++) {
-								to_send += splut[p] + " ";
-							}
-							if (to_send.length() > 0) to_send.pop_back();
-
-							message_sent = false;
-							the_client->send(to_send, static_cast<int>(packages_id::MESSAGE));
-							Sockets::final_package pkg;
-							display.printAt(1, "Sending message...");
-							while (!message_sent) std::this_thread::sleep_for(std::chrono::milliseconds(70)); // whoever is running shall change message_sent to true if MESSAGE_SENT is got to ensure send
-
-							if (GetTickCount64()/1000 < 20) display.printAt(2, "Voosh!");
-							else display.printAt(2, "Sent!");
-
-							display.newMessage("[You -> Them] " + to_send);
-						}
-					}
-				}
-				else if (cmd == "version") {
-					display.printAt(0, "[@] Version:");
-					display.printAt(1, version_app);
-				}
-				else if (cmd == "discord") {
-					display.printAt(0, "[@] Discord:");
-					display.printAt(1, discord_link);
-				}
-				else if (cmd == "tutorial" || cmd == "t") {
-					display.printAt(0, "[@] Tutorial:");
-
-					display.printAt(1, "You can host yourself by doing this:");
-					display.printAt(2, "> Run 'host' with a password, like 97531, and then tell your friend the password;");
-					display.printAt(3, "> They can connect to you by using 'connect <ip> <the password>';");
-					display.printAt(4, "> Add items via 'add <path>';");
-					display.printAt(5, "> Send them with 'sendfiles'. Your friend have to do 'receivefiles' to receive them.");
-					display.printAt(6, "> Done.");
-
-					display.printAt(8, "You can connect to your friend by doing this:");
-					display.printAt(9, "> Run 'connect' with the IP and password they gave to you;");
-					display.printAt(10, "> Accept their files with 'receivefiles';");
-					display.printAt(11, "> At the end you have the files they wanted you to have! Enjoy.");
-
-				}
-				else if (cmd == "credits") {
-					display.printAt(0, "[@] Credits:");
-
-					display.printAt(1, "App developed by:");
-					display.printAt(2, "- Lohkdesgds H. Lhuminury");
-
-					display.printAt(4, "Icon created by:");
-					display.printAt(5, "- Lupspie");
-
-					display.printAt(7, "Special thanks to:");
-					display.printAt(8, "- You, because you're using the app ;P");					
-				}
-				else if (cmd == "exit") {
-					dead = true;
-				}
-				else if (cmd != "debug") {
-				    display.printAt(0, "[@] 404 not found!");
-				    display.printAt(1, "Sorry, this command was not found!");
-				    display.printAt(2, "Need help? Try 'help' ;P");
-				}
-
-				if (cmd == "debug" || always_go_back_to_debug) {
-					input.clsInput();
-					display.setCommandEntry("");
-					display.clearAllLines();
-
-
-					for (bool keep = true; keep;) {
-						while (input.copyInput().length() == 0) {
-							handle_message();
-							display.printAt(0, "[@] Debugging... (press E to exit, K to always go back or any other key to PAUSE)");
-
-							Sockets::con_client* connected = client ? client : (host ? (host->size() > 0 ? (*host->begin()) : nullptr) : nullptr);
-							int mode = connected ? (connected == client ? 2 : 1) : 0; // 2 client, 1 host, 0 none
-
-							if (connected) {
-								display.printAt(1, "Mode:              " + std::string(mode == 2 ? "CLIENT" : "HOSTING"));
-								display.printAt(2, "Buffer SEND:       " + std::to_string(connected->hasSending()) + " packages");
-								display.printAt(3, "Buffer RECV:       " + std::to_string(connected->hasPackage()) + " packages");
-								display.printAt(4, "Bitrate SEND:      " + Tools::byteAutoString(static_cast<double>(connected->getSendTrafficPerSec()), 6, true) + "B/s");
-								display.printAt(5, "Bitrate RECV:      " + Tools::byteAutoString(static_cast<double>(connected->getRecvTrafficPerSec()), 6, true) + "B/s");
-								display.printAt(6, "Total data SEND:   " + Tools::byteAutoString(static_cast<double>(connected->getSendTrafficTotal()), 6, true) + "B");
-								display.printAt(7, "Total data RECV:   " + Tools::byteAutoString(static_cast<double>(connected->getRecvTrafficTotal()), 6, true) + "B");
-								display.printAt(8, "Total data sum:    " + Tools::byteAutoString(static_cast<double>(connected->getTotalTraffic()), 6, true) + "B");
-								display.printAt(9, "Connection status: " + std::string(connected->isConnected() ? "healthy" : "lost"));
-							}
-							else {
-								display.printAt(1, "Mode:              NONE/UNDEF");
-								display.printAt(9, "Connection status: lost");
-							}
-						}
-						if (input.copyInput() == "K") {
-							always_go_back_to_debug = !always_go_back_to_debug;
-							display.clearAllLines();
-							display.printAt(0, "[@] Debug:");
-							display.printAt(1, "Always go back to debug is now: " + std::string(always_go_back_to_debug ? "ENABLED" : "DISABLED"));
-							if (always_go_back_to_debug) display.printAt(2, "You will have to enter 'E' everytime you want a new command.");
-							display.printAt(3, "Updating this page in 4 seconds...");
-							std::this_thread::sleep_for(std::chrono::seconds(4));
-							input.clsInput();
-						}
-						else {
-							if (input.copyInput() != "E") {
-								input.clsInput();
-								display.printAt(0, "[@] Debug PAUSED (press E to exit or any other key to PLAY)");
-								while (input.copyInput().length() == 0) { handle_message(); std::this_thread::sleep_for(std::chrono::milliseconds(150)); }
-								input.clsInput();
-							}
-							if (input.copyInput() == "E") // can come from != E
-							{
-								display.clearAllLines();
-								display.printAt(0, "[@] You left the Debugging page.");
-								keep = false;
-							}
-						}
-					}
+				else if (!file.is_open()) {
+					liner << local_prefix + ("It seems that there's no file opened yet... Try /send first?");
 				}
 			}
 
+			file_send_thr.stop();
+			file_send_thr.join();
+			file_send_thr.set([&](Tools::boolThreadF b) {
+				send_thread(b, conn, file, file_m, this_packages_total_count,/* signal_got,*/ file_transf_perc, last_request, status.on_transfer);
+			});
+			file_send_thr.start();
 
+			liner << local_prefix + ("Transfering data!");
+		}
+		else if (processed[0] == "/close")
+		{
+			conn.send_package(compress(packages_id::FILE_TRANSFER_CLOSE, ""));
+			liner << local_prefix + ("Removed self from server's list.");
+
+			if (file_m.is_locked()) {
+				liner << local_prefix + ("The file seems to be locked now. Try again later?");
+				return;
+			}
+			Tools::AutoLock l(file_m);
+
+			if (file.is_open()) {
+				file.close();
+				liner << local_prefix + ("Closed file successfully. If there was a transfer to you, file might be corrupted.");
+			}
+			liner << local_prefix + ("Cleanup done.");
+			status.on_transfer = false;
+
+			last_request = file_send_request{};
+		}
+		else if (processed[0] == "/receive")
+		{
+			if (file.is_open()) {
+				liner << local_prefix + ("You have a file open already. Do you want to force /close it? (/close)");
+				liner << local_prefix + ("/close will kill any task in progress.");
+			}
+			else if (strnlen_s(last_request.filename, max_file_name) <= 0) {
+				liner << local_prefix + ("It seems that there's no file to receive...");
+			}
+			else if (file_m.is_locked()) {
+				liner << local_prefix + ("The file seems to be locked now. Try again later?");
+				return;
+			}
+			else {
+				Tools::AutoLock l(file_m);
+
+				for (auto& i : last_request.filename) {
+					if (i == '/' || i == '\\') i = '%';
+				}
+
+				liner << local_prefix + (std::string("Opening result file '") + last_request.filename + "' to accept transfer...");
+
+				if (file.open(last_request.filename, Interface::smartfile::file_modes::WRITE)) {
+
+					liner << local_prefix + ("You are set to download the file now.");
+
+					conn.send_package(compress(packages_id::FILE_ACCEPT_REQUEST_SEND, Interface::transform_any_to_package(&last_request, sizeof(file_send_request)))); // CHECK
+				}
+
+			}
+		}
+		else if (str.find("/") == 0) {
+
+			liner << local_prefix + "This command doesn't exist. Sorry.";
+		}
+		else if (!str.empty())
+		{
+			//liner.force_update();
+			conn.send_priority_package(compress(packages_id::MESSAGE, str.substr(0, max_input_size)));
 		}
 
-		//Sleep(10);
-		if (clear_input_waiting) {
-			clear_input_waiting = false;
-			input.clsInput();
+	});
+
+
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * / " " " " " " " " " " " " " " " " " " " " " " " " " " " " \ * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * |               RECEIVE AUTOMATIC HANDLING                | * * * * * * * * * * * * * * * * * * * // 
+	// * * * * * * * * * * * * * * * * * * * \ . . . . . . . . . . . . . . . . . . . . . . . . . . . . / * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+	Tools::SuperThread<> request_update{Tools::superthread::performance_mode::EXTREMELY_LOW_POWER};
+	request_update.set([&](Tools::boolThreadF run) {
+		while (run()) {
+			conn.send_package(compress(packages_id::REQUEST_TYPING, ""));
+			std::this_thread::sleep_for(Custom::time_typing_limit);
 		}
-	}
+	});
+	request_update.start();
 
 
-	input.die = true;
-	thr_input.join();
-	thr_autorefresh.join();
-	if (thr_handle_packages) {
-		thr_handle_packages->join();
-		delete thr_handle_packages;
+	// handle packages self
+	conn.overwrite_reads_to([&](const Interface::Connection& me, Interface::Package& combining) {
+
+		try{
+			uintptr_t thus = (uintptr_t)&me;
+
+			std::string& data = combining.small_data;
+
+			if (data.size() < 1) return;
+			if (!thus) return;
+
+			const char* data_ahead = data.data() + 1;
+
+			/*if (high_performance_needed) {
+				me.set_mode(Tools::superthread::performance_mode::HIGH_PERFORMANCE);
+				high_performance_needed--;
+			}
+			else me.set_mode(Tools::superthread::performance_mode::BALANCED);*/
+
+			switch (static_cast<packages_id>(data[0])) {
+			case packages_id::MESSAGE_RECEIVED:
+			{
+				liner << data_ahead;
+			}
+				break;
+			case packages_id::TYPING:
+			{
+				last_typing_amount = atoi(data_ahead);
+			}
+				break;
+			/*case packages_id::SIGNAL:
+			{
+				signal_got = true;
+			}
+				break;*/
+			case packages_id::SERVER_MESSAGE:
+			{
+				liner << server_prefix + data_ahead;
+			}
+				break;
+			case packages_id::FILE_ASK_SEND:
+			{
+				/*
+				Sending | Receiving
+
+				FILE_ASK_SEND >>
+				<< FILE_ACCEPT_REQUEST_SEND (receiver open file and wait)
+				FILE_TRANSFER >> (sender open file and thread to send)
+				FILE_TRANSFER_CLOSE >> (receiver close)
+				*/
+
+				//liner.force_update();
+
+				if (status.on_transfer) {
+					liner << local_prefix + "Someone wants to send a file, but you're on a transfer already, so you can't accept it.";
+				}
+				else if (data.size() == sizeof(file_send_request) + 1) {
+
+					last_request = file_send_request{};
+					Interface::transform_any_package_back(&last_request, sizeof(file_send_request), data.substr(1));
+
+					if (last_request.filesize && strnlen_s(last_request.filename, max_file_name) != 0 && last_request._origin_transfer != 0) {
+						liner << local_prefix + last_request.from + " &fwants to send a file named '" + last_request.filename + "' (" + Tools::byte_auto_string(last_request.filesize, 2) + "B)";
+						liner << local_prefix + "Type &a/receive&f to say you want it.";
+					}
+					else {
+						liner << local_prefix + "&cA malformed file transfer request was received!";
+						last_request = file_send_request{};
+					}
+				}
+				else {
+					liner << local_prefix + "&cA malformed file transfer request was received!";
+					last_request = file_send_request{};
+				}
+			}
+				break;
+			case packages_id::FILE_TRANSFER: // me receive file
+			{
+				if (!status.on_transfer) {
+					liner << local_prefix + "&aTransfering has initialized.";
+				}
+				status.on_transfer = true;
+				//high_performance_needed = high_performance_cooldown;
+
+				//Tools::AutoLock l(file_m);
+
+				if (!file.is_open()) {
+					liner << local_prefix + "&4[EXCEPTION]&c Someone tried to send you file data. Requesting server to stop.";
+
+					//liner.force_update();
+
+					conn.send_package(compress(packages_id::FILE_TRANSFER_CLOSE, ""));
+					break;
+				}
+				else if (auto currdata = data.substr(1); currdata.size()) {
+					this_packages_total_count+= currdata.size();
+					file.write(currdata);
+
+					file_transf_perc = file.total_size() * 1.0 / last_request.filesize;
+				}
+			}
+				break;
+			case packages_id::FILE_TRANSFER_CANCEL_NO_USER: // if me sending, cancel send
+			{
+				status.on_transfer = false;
+
+				file_send_thr.stop();
+			}
+				break;
+			case packages_id::FILE_TRANSFER_CLOSE: // me close file
+			{
+				if (status.on_transfer) {
+					liner << local_prefix + "&aTransfering is ending.";
+				}
+				status.on_transfer = false;
+
+				Tools::AutoLock l(file_m);
+
+				//liner.force_update();
+
+				if (!file.is_open()) {
+					liner << local_prefix + "&4[EXCEPTION] &cServer asked to close file, but no file is open.";
+				}
+				else {
+					file.close();
+					liner << local_prefix + "&aTransfer complete.";
+				}
+
+				last_request = file_send_request{};
+			}
+				break;
+			}
+		}
+		catch (const std::exception& e) {
+			liner << local_prefix + "&4[EXCEPTION] &cFatal exception (may break file transfer): " + e.what();
+		}
+		catch (...) {
+			liner << local_prefix + "&4[EXCEPTION] &cUNKNOWN FATAL EXCEPTION (may break file transfer): ";
+		}
+	});
+
+
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * / " " " " " " " " " " " " " " " " " " " " " " " " " " " " \ * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * |                    END OF MAIN CODE                     | * * * * * * * * * * * * * * * * * * * // 
+	// * * * * * * * * * * * * * * * * * * * \ . . . . . . . . . . . . . . . . . . . . . . . . . . . . / * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+	// enable user interaction
+	userinput.ignore_strokes(false);
+	display->refresh_all_forced();
+
+	bool once_joined = false;
+
+	// wait for the end
+	while (!status.quitting && conn.is_connected()) {
+		once_joined = true;
+		std::this_thread::sleep_for(std::chrono::milliseconds(250));
+		std::this_thread::yield();
 	}
-	if (thr_autosend_packages) {
-		thr_autosend_packages->join();
-		delete thr_autosend_packages;
+
+	// end threads lmao
+	request_update.stop();
+	file_send_thr.stop();
+
+
+	if (!conn.is_connected() && once_joined) {
+		display->clear_all_to({ ' ' });
+		liner << local_prefix + "&cConnection LOST! You or the server got offline. Exiting the app...";
 	}
+
+	display->wait_for_n_draws(1);
+	display.reset();
+
+	std::this_thread::sleep_for(std::chrono::seconds(5));
 
 	return 0;
 }
 
-
-
-void input_handler(user_input& in) {
-	while (!in.die) {
-		int ch = Custom::getCH();
-
-		in.m.lock();
-
-		switch (ch) {
-		case 27: // esc
-			break;
-		case 13: // enter
-			in.hasbreak = true;
-			break;
-		case 8: // backspace
-			if (in.input_going_on.length() > 0) in.input_going_on.pop_back();
-			break;
-		default:
-			if (ch < 256) {
-				in.input_going_on += ch;
-			}
-		}
-		in.m.unlock();
-
-		while (in.hasbreak && !in.die);
-	}
-}
-void update_display(Custom::DISPLAY<100, 30>& d, bool& die) {
-	size_t sometimes = 100;
-	while (!die) {
-		d.flip();
-		if (sometimes++ > 100) {
-			sometimes = 0;
-			Custom::ShowConsoleCursor(false);
-			Custom::disableEcho(true);
-		}
-		//std::this_thread::sleep_for(std::chrono::milliseconds(20));
-	}
-}
-std::string shrinkText(std::string text, const size_t limit, const ULONGLONG ms, const ULONGLONG start, const size_t time_ticks_wait)
+std::string compress(const packages_id id, const std::string& str)
 {
-	int difference = static_cast<int>(text.length() - limit);
+	return std::string(static_cast<char>(id) + str);
+}
 
-	if (difference > 0) {
-		int movement = ((int)((GetTickCount64() - start) / ms) % (2 * (difference + time_ticks_wait)));
-		int exc = movement > (difference + time_ticks_wait) ? (movement % (difference + time_ticks_wait)) : 0;
 
-		if (movement > difference) movement = difference;
-		if (movement < 0) movement = 0;
+void send_thread(Tools::boolThreadF run, Interface::Connection& conn, Interface::SmartFile& file, Tools::SuperMutex& file_m, size_t& packages_total_count, /*bool& signal,*/ double& perc, file_send_request file_info, bool& on_transf)
+{
+	if (!conn.is_connected()) return;
+	if (!file.is_open()) return;
+	if (file_m.is_locked()) return;
 
-		movement -= exc;
+	try {
+		Tools::AutoLock l(file_m);
 
-		if (movement > difference) movement = difference;
-		if (movement < 0) movement = 0;
+		packages_total_count = 0;
 
-		text = text.substr(movement);
-		if (text.length() > limit) text = text.substr(0, limit);
+		on_transf = true;
+
+		//conn.send_package(std::move(file));
+
+		while (run()) {
+			std::string buf;
+			if (file.read(buf, Interface::connection::package_size) <= 0) {
+				conn.send_package(compress(packages_id::FILE_TRANSFER_CLOSE, ""));
+				file.close();
+				on_transf = false;
+				return;
+			}
+
+			packages_total_count += buf.size();
+			conn.send_package(compress(packages_id::FILE_TRANSFER, buf));
+
+			perc = (packages_total_count * 1.0) / file_info.filesize;
+
+//			packages_total_count+= buf.size();
+		}
+		on_transf = false;
+
+		perc = 1.0;
+
+		// on stop, abort and close.
+		file.close();
+		conn.send_package(compress(packages_id::FILE_TRANSFER_CLOSE, ""));
+	}
+	catch (...) {
+		on_transf = false;
+		file.close();
+		conn.send_package(compress(packages_id::FILE_TRANSFER_CLOSE, ""));
 	}
 
-	return text;
+
+	/*if (!conn.is_connected()) return;
+	if (!file.is_open()) return;
+	if (file_m.is_locked()) return;
+
+
+	try {
+		Tools::AutoLock l(file_m);
+
+		Interface::MemoryFile memfile;
+		if (!memfile.clone(file)) {
+			debug("send_thread FAILED to clone from SMARTFILE!");
+			perc = -1.0;
+			return;
+		}
+
+		conn.send_package(std::move(memfile));
+
+		perc = 1.0;
+
+		// on stop, abort and close.
+		file.close();
+		conn.send_package(compress(packages_id::FILE_TRANSFER_CLOSE, ""));
+	}
+	catch (...) {
+		file.close();
+		conn.send_package(compress(packages_id::FILE_TRANSFER_CLOSE, ""));
+	}*/
 }
-void cleanAvoidPath(std::string& s)
+
+
+
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+// * * * * * * * * * * * * * * * * * * * / " " " " " " " " " " " " " " " " " " " " " " " " " " " " \ * * * * * * * * * * * * * * * * * * * //
+// * * * * * * * * * * * * * * * * * * * |                     HOSTING SERVER                      | * * * * * * * * * * * * * * * * * * * // 
+// * * * * * * * * * * * * * * * * * * * \ . . . . . . . . . . . . . . . . . . . . . . . . . . . . / * * * * * * * * * * * * * * * * * * * //
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+
+
+int as_host()
 {
-	std::for_each(s.begin(), s.end(), [](char& c) {if (c == '/')  c = '$'; });
-	std::for_each(s.begin(), s.end(), [](char& c) {if (c == '\\') c = '#'; });
-	std::for_each(s.begin(), s.end(), [](char& c) {if (c == ':')  c = '-'; });
-}
+	std::shared_ptr<Custom::CmdDisplay<WIDTH, HEIGHT>> display = std::make_shared<Custom::CmdDisplay<WIDTH, HEIGHT>>();
+	Custom::MultiLiner liner;
+
+	display->draw_at(0, 0, "Please wait...");
+
+	display->add_drawing_func([](int x, int y, Tools::char_c& ch)->bool {
+		if (x == -1) return true;
+		if ((y == 1)) ch = (x % 2 == 0) ? Tools::char_c{ '*', Tools::cstring::C::DARK_GRAY } : Tools::char_c{ ' ' };
+		return false;
+	});
+
+	liner.set_func_draw([display](int py, const Tools::Cstring& str) {
+		display->draw_at(py + 2, 0, empty_line);
+		display->draw_at(py + 2, 0, str);
+	});
+	liner.set_line_amount(HEIGHT - 3);
+	liner.set_line_width_max(WIDTH - 2);
+
+	liner << "Starting host...";
+
+	Interface::Hosting host { true };
+	Custom::Channels channels;
+	Custom::TransferHelp transfers_ongoing;
+	double _a_tb_s = 0, _a_tb_r = 0;
 
 
-void sendFileAuto(bool& message_sent, SuperMutex& client_m, bool& die, Sockets::con_client* c, std::vector<std::pair<std::string, short>>& list, bool& working, std::string& syst) {
-	auto giveup = [&](std::string err = "Could not proceed.") {working = false; syst = err; };
-	if (!c) { giveup(); return; }
-	if (!c->isConnected()) { giveup(); return; }
+	host.set_connections_limit(20); // 0 = unlimited
 
 
-	const size_t default_time_to_update = 500;
-	size_t packages_of_file = 0;
-
-	auto getTime = [] {return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()); };
-	auto aheadTime = [&](std::chrono::milliseconds m) {return getTime() - m; };
-	auto latest_upd = getTime();
-
-	auto timeToText = [&] {return (aheadTime(latest_upd).count() > default_time_to_update) ? ([&] {latest_upd = getTime(); return true; }()) : false; };
-
-	auto msg = [&](const std::string s, const bool ignore_t = true) {if (!ignore_t && !timeToText()) return; syst = s; };
-	auto perc = [&](const double d, const int dots = 0) {if (timeToText()) { char buff[32]; sprintf_s(buff, "P#%06zu|%02.1lf%c%s", packages_of_file, d, '%', [&]() {std::string u; for (int k = 0; k < 4; k++) if (k < dots) u += '.'; else u += ' '; return u; }().c_str()); msg("Sent " + std::string(buff)); }};
-
-
-
-	//ULONGLONG latest_perc_upd = 0;
-	//auto closeFileAndCleanUp = [/*&handle,*/ &syst, &filesiz, &readden]() {/*handle.close();*/ filesiz = 1;  readden = 0; };
-	//auto msg = [&syst](const std::string s) {std::string c = std::to_string(GetTickCount64() % 10000); size_t a = c.length(); syst = "[@" + [&]() {std::string k; for (int u = 4; u > a; u--) k += '0'; return k; }() + c + "] " + s; };
-	//auto perc = [&](const double d, const int dots = 0, std::string ext = "") {if (GetTickCount64() - latest_perc_upd > 200) { latest_perc_upd = GetTickCount64(); char buff[16]; sprintf_s(buff, "%02.1lf%c%s", d, '%', [&]() {std::string u; for (int k = 0; k < 4; k++) if (k < dots) u += '.'; else u += ' '; return u; }().c_str()); msg("Sent " + std::string(buff) + ext); }};
-
-	msg("Checking if can actually send file...");
-
-	client_m.lock();
-
-	c->send("check", static_cast<int>(packages_id::FILE_AVAILABLE));
-
-	std::shared_ptr<Sockets::final_package> pkg;
-	if (!c->recv(pkg, 2000)) { client_m.unlock(); giveup("Timeout."); return; }
-
-	if (pkg->data_type != static_cast<int>(packages_id::FILE_AVAILABLE)) { client_m.unlock(); giveup(); return; }
-	if (pkg->variable_data != "yes") { client_m.unlock(); giveup("The other side doesn't accept file transfer."); return; }
-
-	client_m.unlock();
-
-	// sending
-
-	working = true;
-
-	// 1 skip/clean, 0 try again, -1 return
-	auto handle_pack = [&](std::pair<std::string, short>& i)->int{
-
-		SmartFILE handle;
-		long long filesiz = Tools::getFileSize(i.first);
-		long long readden = 0;
-
-		if (!handle.open(i.first.c_str(), file_modes::READ)) {
-			msg("File '" + i.first + "' was not found. Skipping...");
-			std::this_thread::sleep_for(std::chrono::seconds(2));
-			return 1;
-		}
-
-		client_m.lock();
-
-		c->send(std::to_string(filesiz), static_cast<int>(packages_id::FILE_SIZE)); // FIRST!
-		c->send(i.first, static_cast<int>(packages_id::FILE_OPEN));
-
-		msg("Preparing to send " + Tools::byteAutoString(filesiz, 2) + "B...");
-
-		std::shared_ptr<Sockets::final_package> pkg;
-		do {
-			if (!c->recv(pkg, 5000)) { 
-				client_m.unlock();
-				msg("Timeout on sync, trying again...");
-				std::this_thread::sleep_for(std::chrono::seconds(2));
-				return 0;
-			}
-			message_sent |= (pkg->data_type == static_cast<int>(packages_id::MESSAGE_SENT));
-		} while (pkg->data_type == static_cast<int>(packages_id::MESSAGE_SENT));
-
-		client_m.unlock();
-
-		if (pkg->data_type != static_cast<int>(packages_id::FILE_OK)) {
-			msg("Failed to sync file. Trying again...");
-			std::this_thread::sleep_for(std::chrono::seconds(2));
-			return 0;
-		}
-
-		packages_of_file = 0;
-		//SmartFILE test;
-		//test.open("THIS_IS_A_TEST.test", file_modes::WRITE);
-
-		for (bool end = false; !end;) {
-
-			if (c->isConnected())
-			{
-				std::shared_ptr<Sockets::final_package> pkg2 = std::make_shared<Sockets::final_package>();
-
-				packages_of_file++;
-				readden += handle.read(pkg2->variable_data, (Sockets::default_package_size << 1)); //  64 kB/tick
-
-				if (handle.eof()) {
-					if (readden != filesiz) {
-						msg("File out of range?! FATAL ERROR");
-						std::this_thread::sleep_for(std::chrono::seconds(10));
-					}
-					client_m.lock();
-					end = true;
-				}
-
-				//test.write(pkg2->variable_data);
-
-				pkg2->data_type = static_cast<int>(packages_id::FILE_RECEIVING);
-				c->send(pkg2);
-			}
-			else {
-				msg("Lost connection.");
-				return -1;
-			}
-
-			perc(readden * 100.0 / filesiz, (getTime().count() / default_time_to_update) % 4);
-		}
-		//test.close();
+	display->add_tick_func([&](Custom::CmdDisplay<WIDTH, HEIGHT>& thus) {
 		
-		while (c->hasSending()) {
-			msg("Waiting end of buffer" + [&](const int dots) {std::string u; for (int k = 0; k < 4; k++) if (k < dots) u += '.'; else u += ' '; return u; }((getTime().count() / default_time_to_update) % 4));
-			std::this_thread::sleep_for(std::chrono::milliseconds(default_time_to_update));
+		double _tb_s = _a_tb_s, _tb_r = _a_tb_r;
+
+		for (size_t p = 0; p < host.size(); p++) {
+			auto u = host.get_connection(p);
+			_tb_r += static_cast<double>(u->get_network_info().recv_get_total());
+			_tb_s += static_cast<double>(u->get_network_info().send_get_total());
 		}
 
-		std::this_thread::sleep_for(std::chrono::seconds(2));
+		thus.draw_at(0, 0, 
+			std::string("&8[ &2CONNECTED &8][ &7TOTAL BANDWITH UPLOAD: ") + Tools::byte_auto_string(_tb_s, 2) + "B &8|&7 DOWNLOAD: " + Tools::byte_auto_string(_tb_r, 2) + "B &8]" + empty_line
+			,false);
+		display->set_window_name(default_naming_top + "Hosting! " + std::to_string(host.size()) + " connected");
+	});
 
-		c->send("end", static_cast<int>(packages_id::FILE_CLOSE));
-		msg("Waiting response... [#" + std::to_string(packages_of_file) + "]");
+	if (!host.is_connected()) {
+		display->set_window_name(default_naming_top + "Failed to open host!");
+		liner << "&cCould not open host on default port &4" + std::to_string(Interface::connection::default_port) + "&c.";
+		display->wait_for_n_draws(1);
+		display.reset();
+		std::this_thread::sleep_for(std::chrono::seconds(3));
+		return 0;
+	}
 
-		if (c->recv(pkg, 30000)) {
-			if (pkg->data_type != static_cast<int>(packages_id::FILE_OK)) {
-				msg("Failed to sync file. Trying again (sorry)... [#" + std::to_string(packages_of_file) + "]");
-				client_m.unlock();
-				std::this_thread::sleep_for(std::chrono::seconds(5));
-				return 0;
+	liner << "Started host on port &e" + std::to_string(Interface::connection::default_port) + "&f successfully! Waiting new connections...";
+
+	display->refresh_all_forced();
+
+
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * / " " " " " " " " " " " " " " " " " " " " " " " " " " " " \ * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * |                AUTOMATIC PASSIVE CONTROL                | * * * * * * * * * * * * * * * * * * * // 
+	// * * * * * * * * * * * * * * * * * * * \ . . . . . . . . . . . . . . . . . . . . . . . . . . . . / * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+
+	//size_t high_performance_needed = high_performance_cooldown;
+
+	auto function_command = [&](Interface::Connection& me, Interface::Package& datada) {
+		//liner << "&5[DEBUG] " + data;
+		uintptr_t thus = (uintptr_t)&me;
+
+		{
+			bool found = false;
+			for (size_t p = 0; p < host.size(); p++)
+			{
+				auto i = host.get_connection(p);
+				if ((uintptr_t)i.get() == thus) {
+					found = true;
+					break;
+				}
+			}
+			if (!found) return;
+		}
+
+		std::string& data = datada.small_data;
+
+		const char* data_ahead = data.data() + 1;
+
+
+		/*if (high_performance_needed) {
+			me.set_mode(Tools::superthread::performance_mode::HIGH_PERFORMANCE);
+			high_performance_needed--;
+		}
+		else me.set_mode(Tools::superthread::performance_mode::BALANCED);*/
+
+
+		switch (static_cast<packages_id>(data[0])) {
+		case packages_id::VERSION_CHECK:
+		{
+			me.send_package(compress(packages_id::VERSION_CHECK, communication_version));
+
+			if (communication_version != data_ahead) {
+				me.close();
+
+				liner << Tools::sprintf_a("&5[@%s&5]&8{%08X}&f handshake version &cFAILED&f.", channels.channel_of(thus).c_str(), thus);
+				//liner << Tools::sprintf_a("{%08X}", thus) + " handshake version FAILED.";
+				return;
 			}
 			else {
-				msg("Sent file successfully. Processing list... [#" + std::to_string(packages_of_file) + "]");
-				client_m.unlock();
-				std::this_thread::sleep_for(std::chrono::seconds(5));
+
+				liner << Tools::sprintf_a("&5[@%s&5]&8{%08X}&f handshake version &aOK&f.", channels.channel_of(thus).c_str(), thus);
+				//liner << Tools::sprintf_a("{%08X}", thus) + " handshake version OK.";
 			}
 		}
-		else {
-			msg("Failed to sync file. Try again later :( [#" + std::to_string(packages_of_file) + "]");
-			client_m.unlock();
-			std::this_thread::sleep_for(std::chrono::seconds(5));
-			return -1;
+			break;/*
+		case packages_id::SIGNAL:
+		{
+			me.send_package(compress(packages_id::SIGNAL, "")); // no overload way
 		}
-		handle.close();
+			break;*/
+		case packages_id::TYPING:
+		{
+			channels.set_typing(thus);
+		}
+			break;
+		case packages_id::REQUEST_TYPING:
+		{
+			auto count = channels.amount_of_users_typing(channels.channel_of(thus));
+			me.send_package(compress(packages_id::TYPING, std::to_string(count)));
+		}
+			break;
+		case packages_id::SET_NICK:
+		{
+			if (strnlen_s(data_ahead, data.length() - 1) == 0) break;
 
-		return 1;
+			auto old_nick = channels.nick_of(thus);
+
+			if (old_nick == data_ahead) break;
+
+			channels.set_nick(thus, data_ahead);
+			auto mee_ch = channels.channel_of(thus);
+
+			liner << Tools::sprintf_a("&5[@%s&5]&8{%08X}&f %s&f changed name to %s&f.", channels.channel_of(thus).c_str(), thus, old_nick.c_str(), channels.nick_of(thus).c_str());
+			//liner << Tools::sprintf_a("{%08X}", thus) + " changed nick: " + old_nick + " -> " + data_ahead;
+
+			auto l = channels.list(mee_ch);
+
+			if (!old_nick.empty()) {
+				for (auto& i : l) {
+					if (!i.id_ptr.expired()) {
+						auto thm = i.id_ptr.lock();
+						thm->send_package(compress(packages_id::SERVER_MESSAGE, Tools::sprintf_a("&f%s&f changed nickname to &f%s&f", old_nick.c_str(), data_ahead)));
+					}
+				}
+			}
+			else {
+				for (auto& i : l) {
+					if (!i.id_ptr.expired()) {
+						auto thm = i.id_ptr.lock();
+						thm->send_package(compress(packages_id::SERVER_MESSAGE, Tools::sprintf_a("&fSomeone just appeared as &f%s&f!", data_ahead)));
+					}
+				}
+			}
+		}
+			break;
+		case packages_id::MESSAGE:
+		{
+			if (strnlen_s(data_ahead, data.length() - 1) == 0) break;
+
+			auto mee_ch = channels.channel_of(thus);
+			auto l = channels.list(mee_ch);
+
+			//liner << Tools::sprintf_a("[@%s]{%08X} %s: %s", channels.channel_of(thus).c_str(), thus, channels.nick_of(thus).c_str(), data_ahead);
+			//liner << "[@" + mee_ch + "]" + Tools::sprintf_a("{%08X}", thus) + " (" + channels.nick_of(thus) + ") sent: " + data_ahead;
+
+			for (auto& i : l) {
+				if (!i.id_ptr.expired()) {
+					auto thm = i.id_ptr.lock();
+					thm->send_package(compress(packages_id::MESSAGE_RECEIVED, Tools::sprintf_a("&f%s&8: &7%s", channels.nick_of(thus).c_str(), data_ahead)));
+				}
+			}
+		}
+			break;
+		case packages_id::SET_CHANNEL:
+		{
+			auto old_ch = channels.channel_of(thus);
+			std::string curr_channel = (data_ahead ? data_ahead : "PUBLIC");
+			curr_channel = curr_channel.substr(0, max_name_length);
+			channels.set(thus, curr_channel);
+
+			liner << Tools::sprintf_a("&5[@%s&5]&8{%08X}&f %s&f is now on channel %s&f.", channels.channel_of(thus).c_str(), thus, channels.nick_of(thus).c_str(), curr_channel.c_str());
+			//liner << Tools::sprintf_a("{%08X}", thus) + " changed to channel '" + curr_channel + "'";
+
+			{
+				auto l = channels.list(old_ch);
+				for (auto& i : l) {
+					if (!i.id_ptr.expired()) {
+						auto thm = i.id_ptr.lock();
+						thm->send_package(compress(packages_id::SERVER_MESSAGE, Tools::sprintf_a("&f%s &eleft the channel.", channels.nick_of(thus).c_str())));
+					}
+				}
+			}
+
+			{
+				auto l = channels.list(curr_channel);
+				for (auto& i : l) {
+					if (!i.id_ptr.expired()) {
+						auto thm = i.id_ptr.lock();
+						thm->send_package(compress(packages_id::SERVER_MESSAGE, Tools::sprintf_a("&f%s &ejoined the channel.", channels.nick_of(thus).c_str())));
+					}
+				}
+			}
+		}
+			break;
+		case packages_id::LIST_REQUEST:
+		{
+			auto getting = transfers_ongoing.list_transf(thus);
+
+			auto offset = atoll(data_ahead);
+			size_t real_offset = items_per_list * offset;
+			
+			if (real_offset >= getting.size()) {
+				me.send_package(compress(packages_id::SERVER_MESSAGE, "There's no one waiting for your file."));
+			}
+			else {
+				me.send_package(compress(packages_id::SERVER_MESSAGE, Tools::sprintf_a("List of users in send queue [&e%zu&f-&e%zu&f]:", real_offset, (real_offset + items_per_list > getting.size()) ? getting.size() : (real_offset + items_per_list))));
+			}
+
+			for (size_t p = real_offset; p < getting.size() && (p - real_offset) < items_per_list; p++) {
+				me.send_package(compress(packages_id::SERVER_MESSAGE, Tools::sprintf_a("[&6%zu&f] &f%s", p, channels.nick_of(getting[p]).c_str())));
+			}
+		}
+			break;
+		case packages_id::FILE_ASK_SEND:
+		{
+			/*
+			Sending | Receiving
+
+			FILE_ASK_SEND >>
+			<< FILE_ACCEPT_REQUEST_SEND (receiver open file and wait)
+			FILE_TRANSFER >> (sender open file and thread to send)
+			FILE_TRANSFER_CLOSE >> (receiver close)
+			*/
+
+			if (data.size() < sizeof(file_send_request) + 1) {
+				
+				liner << Tools::sprintf_a("&5[@%s&5]&8{%08X}&f %s bad request &cFILE_ASK_SEND&f.", channels.channel_of(thus).c_str(), thus, channels.nick_of(thus).c_str());
+				//liner << Tools::sprintf_a("{%08X}", thus) + " " + channels.nick_of(thus) + " bad request FILE_ASK_SEND.";
+
+				me.send_package(compress(packages_id::SERVER_MESSAGE, "&4[ERROR] Bad request. Communication data was lost or corrupted. Try again."));
+			}
+
+			auto mee_ch = channels.channel_of(thus);
+			auto l = channels.list(mee_ch);
+
+			file_send_request protocol;
+			Interface::transform_any_package_back(&protocol, sizeof(file_send_request), data.substr(1));
+
+			liner << Tools::sprintf_a("&5[@%s&5]&8{%08X}&f %s&f dropped file in chat &8{%s;%sB}&f.", channels.channel_of(thus).c_str(), thus, channels.nick_of(thus).c_str(), protocol.filename, Tools::byte_auto_string(protocol.filesize, 2).c_str());
+			//liner << "[@" + mee_ch + "]" + Tools::sprintf_a("{%08X}", thus) + " " + channels.nick_of(thus) + " is about to send '" + protocol.filename + "' - " + Tools::byte_auto_string(protocol.filesize, 2) + "B";
+
+			protocol._origin_transfer = thus;
+			sprintf_s(protocol.from, "%s", channels.nick_of(thus).c_str());
+
+			for (auto& i : l) {
+				if (!i.id_ptr.expired() && i.id_i != thus) {
+					auto thm = i.id_ptr.lock();
+					thm->send_package(compress(packages_id::FILE_ASK_SEND, Interface::transform_any_to_package(&protocol, sizeof(file_send_request))));
+				}
+			}
+
+			me.send_package(compress(packages_id::SERVER_MESSAGE, "&6Users now know about your file."));
+		}
+			break;
+		case packages_id::FILE_ACCEPT_REQUEST_SEND:
+		{
+			if (data.size() < sizeof(file_send_request) + 1) {
+				liner << Tools::sprintf_a("&5[@%s&5]&8{%08X}&f %s&f bad request &cFILE_ACCEPT_REQUEST_SEND&f.", channels.channel_of(thus).c_str(), thus, channels.nick_of(thus).c_str());
+				//liner << Tools::sprintf_a("{%08X}", thus) + " " + channels.nick_of(thus) + " bad request FILE_ACCEPT_REQUEST_SEND.";
+
+				me.send_package(compress(packages_id::SERVER_MESSAGE, "[ERROR] Bad request. Communication data was lost or corrupted. Try again."));
+			}
+
+			file_send_request protocol;
+			Interface::transform_any_package_back(&protocol, sizeof(file_send_request), data.substr(1));
+
+			if (auto the_transferer = channels.get_user(protocol._origin_transfer); the_transferer) {
+				
+				if (transfers_ongoing.add_me_on_sender(thus, protocol._origin_transfer)) {
+					auto mee_ch = channels.channel_of(thus);
+					auto l = channels.list(mee_ch);
+
+					liner << Tools::sprintf_a("&5[@%s&5]&8{%08X}&f %s&f wants stream from &8{%08X}", channels.channel_of(thus).c_str(), thus, channels.nick_of(thus).c_str(), protocol._origin_transfer);
+					//liner << "[@" + mee_ch + "]" + Tools::sprintf_a("{%08X}", thus) + " (" + channels.nick_of(thus) + ") added self to file transfer from " + Tools::sprintf_a("{%08X}", protocol._origin_transfer);
+
+					for (auto& i : l) {
+						if (!i.id_ptr.expired()) {
+							auto thm = i.id_ptr.lock();
+							thm->send_package(compress(packages_id::SERVER_MESSAGE, Tools::sprintf_a("&b%s&f has added self for &b%s&f's file transfer.", channels.nick_of(thus).c_str(), channels.nick_of(protocol._origin_transfer).c_str())));
+						}
+					}
+				}
+				else {
+					me.send_package(compress(packages_id::SERVER_MESSAGE, "&4[ERROR] File transfer already started, finished or unavailable. Sorry."));
+				}
+			}
+			else {
+				me.send_package(compress(packages_id::SERVER_MESSAGE, "&4[ERROR] Could not find a file transfer ongoing."));
+			}
+		}
+			break;
+		case packages_id::FILE_TRANSFER:
+		{
+			transfers_ongoing.set_transfering(thus);
+
+			auto getting = transfers_ongoing.list_transf(thus);
+
+			//me.set_mode(Tools::superthread::performance_mode::HIGH_PERFORMANCE);
+
+			if (getting.empty()) {
+				me.send_package(compress(packages_id::FILE_TRANSFER_CANCEL_NO_USER, ""));
+				me.send_package(compress(packages_id::SERVER_MESSAGE, "&4[ERROR] No user to transfer file found. No one did /receive or they got offline."));
+
+				transfers_ongoing.cleanup_user(thus);
+			}
+			else {
+				for (auto& i : getting) {
+					auto user = channels.get_user(i);
+					if (user) {
+						//user->set_mode(Tools::superthread::performance_mode::HIGH_PERFORMANCE);
+						user->send_package(data); // direct transfer, no copy or bs.
+					}
+				}
+			}
+		}
+			break;
+		case packages_id::FILE_TRANSFER_CLOSE:
+		{
+			//me.set_mode(Tools::superthread::performance_mode::BALANCED);
+
+			liner << Tools::sprintf_a("&5[@%s&5]&8{%08X}&f %s&f closed a file stream.", channels.channel_of(thus).c_str(), thus, channels.nick_of(thus).c_str());
+			// list is generated only if user did /send
+			auto getting = transfers_ongoing.list_transf(thus);
+
+			me.send_package(compress(packages_id::SERVER_MESSAGE, "&aYour file transfer ended!"));
+
+			//me.set_mode(Tools::superthread::performance_mode::BALANCED);
+
+			if (!getting.empty()) {
+				for (auto& i : getting) {
+					auto user = channels.get_user(i);
+					if (user) {
+						//user->set_mode(Tools::superthread::performance_mode::BALANCED);
+						user->send_package(compress(packages_id::FILE_TRANSFER_CLOSE, "")); // close.
+						user->send_package(compress(packages_id::SERVER_MESSAGE, Tools::sprintf_a("&b%s &aended file transfer!", channels.nick_of(thus).c_str())));
+					}
+				}
+			}
+
+			transfers_ongoing.cleanup_user(thus);
+		}
+			break;
+		}
+
 	};
 
 
-	while (!die && list.size() > 0 && c->isConnected()) {
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * / " " " " " " " " " " " " " " " " " " " " " " " " " " " " \ * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * |                    SIMPLE PEER START                    | * * * * * * * * * * * * * * * * * * * // 
+	// * * * * * * * * * * * * * * * * * * * \ . . . . . . . . . . . . . . . . . . . . . . . . . . . . / * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-		// 1 skip/clean, 0 try again, -1 return
-		int res = handle_pack(list[0]);
 
-		switch (res) {
-		case 1: // clean once
-			list.erase(list.begin());
-			break;
-		case 0: // try again
-			continue;
-		case -1: // cancel all
-			working = false;
-			return;
-		}
-	}
-	working = false;
-	syst = "Ended all tasks.";
-}
+	host.on_new_connection([&](std::shared_ptr<Interface::Connection> nc) {
+		//nc->set_max_buffering(max_buffer);
 
-void handlePackages(bool& message_sent, SuperMutex& client_m, bool& die, Sockets::con_client* c, bool& receive, std::vector<Sockets::final_package>& messages, std::string& syst) {
-	if (!c) return;
-	if (!c->isConnected()) return;
-	SmartFILE handle;
-	LONGLONG filesiz = 1, written = 0;
-	const size_t default_time_to_update = 500;
-	size_t packages_of_file = 0;
 
-	auto getTime = [] {return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()); };
-	auto aheadTime = [&](std::chrono::milliseconds m) {return getTime() - m; };
-	auto latest_upd = getTime();
+		nc->debug_error_function([&](const std::string& err) {liner << local_prefix + "&cSomething bad happened: " + err; });
 
-	auto timeToText = [&](bool just_reset = false) {return (bool)(just_reset ? (1 + (latest_upd = getTime()).count()) : ((aheadTime(latest_upd).count() > default_time_to_update) ? ([&] {latest_upd = getTime(); return true; }()) : false)); };
+		liner << Tools::sprintf_a("&5[@PUBLIC&5]&8{%08X}&f is joining the server...", (uintptr_t)nc.get());
+		channels.add(nc);
 
-	auto cleanUpFile = [&]() {filesiz = 1;  written = 0; packages_of_file = 0; };
-	auto closeFileAndCleanUp = [&]() {handle.close(); cleanUpFile(); };
-	auto msg = [&](const std::string s, const bool ignore_t = true) {if (!ignore_t && !timeToText()) return; timeToText(true); syst = s; };
-	auto perc = [&](const double d, const int dots = 0) {if (timeToText()) { char buff[32]; sprintf_s(buff, "P#%06zu|%02.1lf%c%s", packages_of_file, d, '%', [&]() {std::string u; for (int k = 0; k < 4; k++) if (k < dots) u += '.'; else u += ' '; return u; }().c_str()); msg("Received " + std::string(buff)); }};
-	
-	//bool last_was_receive = false;
+		nc->set_mode(Tools::superthread::performance_mode::BALANCED);
 
-	msg("Waiting for event...");
-
-	Sockets::final_package lmsg;
-
-	//bool recvd = false;
-
-	while (!die) {
-		if (!c->isConnected()) {
-			closeFileAndCleanUp();
-			syst.clear();
-			return;
-		}
-		std::shared_ptr<Sockets::final_package> pkg;
-
-		//std::this_thread::sleep_for(std::chrono::milliseconds(10));
-
-		client_m.lock();
-		/*
-		if (recvd ? true : (c->recv(pkg, 200))) { // recvd means it has already gotten a package (when FILE_RECEIVING is trigger, it loops until is it not, but then it did recv once)
-			recvd = false;*/
-		if (c->recv(pkg, 200)) {
-
-			switch (pkg->data_type) {
-
-			case static_cast<int>(packages_id::VERSION_CHECK):
-			case static_cast<int>(packages_id::PASSWORD_CHECK):
-				msg("Weird behaviour got! Bye.");
-				c->kill();
-				continue;
-			case static_cast<int>(packages_id::MESSAGE):
-				msg("Got message.");
-				messages.push_back(*pkg);
-				c->send("good", static_cast<int>(packages_id::MESSAGE_SENT));
-				break;
-			case static_cast<int>(packages_id::MESSAGE_SENT):
-				message_sent = true;
-				break;
-
-			case static_cast<int>(packages_id::FILE_AVAILABLE):
-				msg((receive ? "Possible file transfer incoming..." : "Blocked file transfer ('rf')"));
-				c->send((receive ? "yes" : "no"), static_cast<int>(packages_id::FILE_AVAILABLE));
-				break;
-
-				// TRANSFER PART:
-
-			case static_cast<int>(packages_id::FILE_SIZE):
-				filesiz = atoll(pkg->variable_data.c_str());
-				msg("Preparing to receive " + Tools::byteAutoString(filesiz, 2) + "B...");
-				std::this_thread::sleep_for(std::chrono::seconds(1));
-				break;
-
-			case static_cast<int>(packages_id::FILE_OPEN):
-				{
-					handle.close();
-					written = 0;
-
-					cleanAvoidPath(pkg->variable_data);
-					if (!handle.open(pkg->variable_data.c_str(), file_modes::WRITE)) {
-						msg("Failed opening file to receive transfer!");
-						c->send("notgood", static_cast<int>(packages_id::FILE_NOT_OK));
-						client_m.unlock();
-						continue;
-					}
-					else {
-						msg("Opened file for transfer!");
-						c->send("good", static_cast<int>(packages_id::FILE_OK));
-					}
-				}
-				break;
-			case static_cast<int>(packages_id::FILE_RECEIVING):
-				{
-					/*do {
-						if (pkg->data_type != static_cast<int>(packages_id::FILE_RECEIVING)) {
-							recvd = true;
-							break;
-						}*/
-
-					packages_of_file++;
-					written += handle.write(pkg->variable_data);
-					if (filesiz > 0) perc(written * 100.0 / filesiz, (getTime().count() / default_time_to_update) % 4);
-					else msg("Receiving " + std::to_string(written) + " byte(s)...", false);
-
-					/*} while (c->recv(pkg, 2000));
-					msg(recvd ? "Another package..." : "Timeout...", false);*/
-
-					pkg->variable_data.clear();
-				}
-				break;
-			case static_cast<int>(packages_id::FILE_CLOSE):
-				if (written == filesiz) {
-					msg("File saved successfully. [#" + std::to_string(packages_of_file) + "]");
-					closeFileAndCleanUp();
-					c->send("good", static_cast<int>(packages_id::FILE_OK));
-				}
-				else {
-					msg("Something went wrong somewhere.");
-					//closeFileAndCleanUp();
-					c->send("notgood", static_cast<int>(packages_id::FILE_NOT_OK));
-				}
-				
-				break;
+		auto mee_ch = channels.channel_of((uintptr_t)nc.get());
+		auto l = channels.list(mee_ch);
+		for (auto& i : l) {
+			if (!i.id_ptr.expired() && i.id_i != (uintptr_t)nc.get()) {
+				auto thm = i.id_ptr.lock();
+				thm->send_package(compress(packages_id::SERVER_MESSAGE, Tools::sprintf_a("&8Someone is connecting...", (uintptr_t)nc.get())));
 			}
-			//cleanUpFile(); // no close
 		}
-		/*else {
-			msg("Waiting new event...");
-		}*/
-		client_m.unlock();
+
+		nc->overwrite_reads_to(function_command);
+	});
+	host.on_connection_close([&](uintptr_t id) {
+		liner << Tools::sprintf_a("&5[@%s&5]&8{%08X}&f lost connection", channels.channel_of(id).c_str(), id);
+
+		Interface::Connection* quick = (Interface::Connection*)id;
+		_a_tb_r += static_cast<double>(quick->get_network_info().recv_get_total());
+		_a_tb_s += static_cast<double>(quick->get_network_info().send_get_total());
+
+		auto curr_channel = channels.channel_of(id);
+		auto l = channels.list(curr_channel);
+		for (auto& i : l) {
+			if (!i.id_ptr.expired()) {
+				auto thm = i.id_ptr.lock();
+				thm->send_package(compress(packages_id::SERVER_MESSAGE, Tools::sprintf_a("&8%s disconnected.", (channels.nick_of(id).empty() ? "Someone" : channels.nick_of(id)).c_str())));
+			}
+		}
+
+		channels.remove(id);
+		transfers_ongoing.cleanup_user(id);
+		//memorymng.remove(id);
+	});
+
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * / " " " " " " " " " " " " " " " " " " " " " " " " " " " " \ * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * |                       END OF HOST                       | * * * * * * * * * * * * * * * * * * * // 
+	// * * * * * * * * * * * * * * * * * * * \ . . . . . . . . . . . . . . . . . . . . . . . . . . . . / * * * * * * * * * * * * * * * * * * * //
+	// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+	while (host.is_connected()) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(250));
+		std::this_thread::yield();
 	}
-	syst.clear();
+
+	return 0;
 }

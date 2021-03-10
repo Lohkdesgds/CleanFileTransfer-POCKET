@@ -1,1 +1,0 @@
-Filesystem automatically interprets common %paths% and guarantee default /path/style/to/files.dat
