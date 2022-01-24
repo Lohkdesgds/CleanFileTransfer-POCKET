@@ -3,6 +3,7 @@
 
 #include "synced.h"
 #include "display.h"
+#include "resource.h"
 
 #include <future>
 
@@ -13,6 +14,8 @@ const std::string time_date_now = __TIMESTAMP__;
 
 int main()
 {
+	SetConsoleTitleA("CleanFileTransfer DEFINITIVE EDITION");
+
 	DisplayCMD* dcmd = nullptr; // created once only, no worries
 	std::shared_ptr<SyncedControl> sync;
 	TCP_client client;

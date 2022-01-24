@@ -24,5 +24,12 @@
     <ClInclude Include="display.h">
       <Filter>Display</Filter>
     </ClInclude>
+    <ClInclude Include="resource.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="CleanFileTransfer DEFINITIVE EDITION.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="icon1.ico" />
   </ItemGroup>
 </Project>
