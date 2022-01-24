@@ -1,3 +1,6 @@
-[submodule "CleanFileTransfer POCKET/LSW"]
-	path = CleanFileTransfer POCKET/LSW
-	url = https://github.com/Lohkdesgds/LSW
+[submodule "Lunaris/Socket"]
+	path = Lunaris/Socket
+	url = https://github.com/Lohkdesgds/Lunaris-Socket
+[submodule "Lunaris/Console"]
+	path = Lunaris/Console
+	url = https://github.com/Lohkdesgds/Lunaris-Console
