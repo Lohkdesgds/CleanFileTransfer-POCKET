@@ -45,7 +45,7 @@ int main(int argc, char* argv[])
 		return as_host(a_ip, a_fp_send);
 	}
 	else {
-		cout << console::color::YELLOW << "You should call the app with args: [client | host] | [ip] <file>";
+		cout << console::color::YELLOW << "You should call the app with args: [client | host] [<ip> | NULL] <file>";
 	}
 	return 0;
 }
