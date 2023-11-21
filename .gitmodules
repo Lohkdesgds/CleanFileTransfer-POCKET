@@ -4,3 +4,12 @@
 [submodule "Lunaris/Console"]
 	path = Lunaris/Console
 	url = https://github.com/Lohkdesgds/Lunaris-Console
+[submodule "deps/Lunaris/socket"]
+	path = deps/Lunaris/socket
+	url = https://github.com/LunarisLib/Lunaris-Socket
+[submodule "deps/Lunaris/console"]
+	path = deps/Lunaris/console
+	url = https://github.com/LunarisLib/Lunaris-Console
+[submodule "deps/Lunaris/encryption"]
+	path = deps/Lunaris/encryption
+	url = https://github.com/LunarisLib/Lunaris-Encryption
