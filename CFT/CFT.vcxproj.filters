@@ -1,0 +1,115 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="file_reader.cpp">
+      <Filter>FileReader</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\audio_all.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\audio_mixer.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\audio_sample.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\audio_sample_instance.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\audio_stream.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\audio_voice.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\bitmap.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\config.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\display.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\display_mode.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\event_queue.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\events.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\file.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\font.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\gif.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\keyboard.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\locked_region.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\menu.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\monitor_info.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\mouse.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\native_dialog.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\path.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\shader.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\state.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\thread.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\timer.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\transform.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\utfstring.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\vertex.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\AllegroCPP\src\video.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="FileReader">
+      <UniqueIdentifier>{598af371-bf91-46a3-911c-67c4ec0741dc}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src">
+      <UniqueIdentifier>{9860f462-5062-4bc6-8c0b-5fbb630e3fd6}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="file_reader.h">
+      <Filter>FileReader</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
