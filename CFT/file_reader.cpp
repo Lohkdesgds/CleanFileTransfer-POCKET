@@ -281,42 +281,72 @@ File_handler make_decrypter(AllegroCPP::File& output, AllegroCPP::File& reading)
 #ifdef _DEBUG
 void file_reader_test()
 {
-	printf_s("[file_reader_test] Generating content for test...\n");
+	printf_s("[file_reader_test] Preparing test ground...\n");
 
+	constexpr u_short port_used_in_tcp_test = 25566;
 	constexpr size_t exact_string_size = 25600328;
+	const char first_msg[] = "This is an example of data. As the test needs some random stuff to work, we'll fill this buffer with 0 to 255 information for a while, encrypt, decrypt and check if data is still the same.\n";
+	const char secon_msg[] = "\nNow, we prepare our terrain. Create a file, then read and create another one with encrypted data, then decrypt on a third, then read back.";
+	const char file_names[3][36] = { "test_source.txt", "test_encrypted.txt", "test_decrypted.txt" };
 
 	// Prepare terrain
 	char* src_buf = new char[exact_string_size] {};
-	char* aft_buf = nullptr;
+	char* aft_buf = new char[exact_string_size] {};
 
-	const char first_msg[] = "This is an example of data. As the test needs some random stuff to work, we'll fill this buffer with 0 to 255 information for a while, encrypt, decrypt and check if data is still the same.\n";
-	const char secon_msg[] = "\nNow, we prepare our terrain. Create a file, then read and create another one with encrypted data, then decrypt on a third, then read back.";
+	const auto reset_bufs = [&] {
+		memset(src_buf, 0, exact_string_size);
+		memset(aft_buf, 0, exact_string_size);
 
-	memcpy(src_buf, first_msg, (std::size(first_msg) - 1));
-	memcpy(src_buf + exact_string_size - (std::size(secon_msg) - 1), secon_msg, (std::size(secon_msg) - 1));
+		memcpy(src_buf, first_msg, (std::size(first_msg) - 1));
+		memcpy(src_buf + exact_string_size - (std::size(secon_msg) - 1), secon_msg, (std::size(secon_msg) - 1));
 
-	for (uint32_t times = 0; times < 100000; ++times) { // around 25.6 MB
-		for (int16_t to_char = -128; to_char < 128; ++to_char) {
-			//source_data.insert(source_data.end(), (char)to_char);
-			const char ch = static_cast<char>(to_char);
-			memcpy(src_buf + (std::size(first_msg) - 1) + (static_cast<uint64_t>(to_char + 128) + static_cast<uint64_t>(256) * static_cast<uint64_t>(times)), &ch, 1);
+		for (uint32_t times = 0; times < 100000; ++times) { // around 25.6 MB
+			for (int16_t to_char = -128; to_char < 128; ++to_char) {
+				//source_data.insert(source_data.end(), (char)to_char);
+				const char ch = static_cast<char>(to_char);
+				memcpy(src_buf + (std::size(first_msg) - 1) + (static_cast<uint64_t>(to_char + 128) + static_cast<uint64_t>(256) * static_cast<uint64_t>(times)), &ch, 1);
+			}
 		}
-	}
+	};
 
-	//source_data += ;
+	const auto test_final_to_mem = [&] {
+		printf_s("[file_reader_test] Loading decrypted data into memory for comparison...\n");
+		// Load in memory
+		{
+			AllegroCPP::File fp(file_names[2], "rb");
 
-	printf_s("[file_reader_test] Flushing to a file...\n");
+			fp.read(aft_buf, exact_string_size);
+
+			printf_s("[file_reader_test] Testing...\n");
+			//if (!fp.eof()) throw std::runtime_error("After read back, file is not at the end after expected max read.");
+			if (memcmp(src_buf, aft_buf, exact_string_size) != 0) throw std::runtime_error("Data mismatch!");
+		}
+		printf_s("[file_reader_test] Test good!\n");
+	};
+
+
+	printf_s("[file_reader_test] Generating content for test...\n");
+	reset_bufs();
+
+
+	printf_s("[file_reader_test] Flushing generated data to source file...\n");
 	// fill up test file
 	{
-		AllegroCPP::File fp("test_source.txt", "wb");
+		AllegroCPP::File fp(file_names[0], "wb");
 		fp.write(src_buf, exact_string_size);
 	}
+
+	printf_s("[file_reader_test] Starting tests using this generated file...\n");
+
+	// #=#=#=#=#=#=#=#=#=#=#=#=#=#=# FIRST STEP: FILE 2 FILE 2 FILE #=#=#=#=#=#=#=#=#=#=#=#=#=#=# //
+
+	printf_s("[file_reader_test] ### DISK FILE TEST ONGOING ###\n");
 
 	printf_s("[file_reader_test] Encrypting from a file to another...\n");
 	// Encrypt phase
 	{
-		AllegroCPP::File read_from("test_source.txt", "rb");
-		AllegroCPP::File write_to("test_encrypted.txt", "wb");
+		AllegroCPP::File read_from(file_names[0], "rb");
+		AllegroCPP::File write_to(file_names[1], "wb");
 
 		auto wrk = make_encrypter(write_to, read_from);
 		wrk.start();
@@ -325,36 +355,91 @@ void file_reader_test()
 	printf_s("[file_reader_test] Decrypting from a file to another...\n");
 	// Decrypt phase
 	{
-		AllegroCPP::File read_from("test_encrypted.txt", "rb");
-		AllegroCPP::File write_to("test_decrypted.txt", "wb");
+		AllegroCPP::File read_from(file_names[1], "rb");
+		AllegroCPP::File write_to(file_names[2], "wb");
 
 		auto wrk = make_decrypter(write_to, read_from);
 		wrk.start();
 	}
 
-	printf_s("[file_reader_test] Loading decrypted data into memory for comparison...\n");
-	// Load in memory
+	test_final_to_mem();
+
+	printf_s("[file_reader_test] ### DISK FILE TEST OK!!! ###\n");
+
+	// clean up last test, keep source
+	std::remove(file_names[1]);
+	std::remove(file_names[2]);
+
+	// #=#=#=#=#=#=#=#=#=#=#=#=#=#=# SECOND STEP: FILE 2 FILE 2 FILE #=#=#=#=#=#=#=#=#=#=#=#=#=#=# //
+
+	printf_s("[file_reader_test] ### SOCKET TRANSFER TEST ONGOING ###\n");
+
+	printf_s("[file_reader_test] Launching two asynchronous threads to simulate a double-pc read/write socket scenario...\n");
+
 	{
-		AllegroCPP::File fp("test_decrypted.txt", "rb");
-		aft_buf = new char[exact_string_size] {};
+		std::atomic<int> step[2]; // 0 = sender, 1 = recv. Steps: { INIT = 0, READY = 1, DOING = 2, END = 3 }
 
-		
-		fp.read(aft_buf, exact_string_size);
+		AllegroCPP::Thread sender_thr([&] {
+			auto& stat = step[0];
 
-		printf_s("[file_reader_test] Testing...\n");
-		//if (!fp.eof()) throw std::runtime_error("After read back, file is not at the end after expected max read.");
-		if (memcmp(src_buf, aft_buf, exact_string_size) != 0) throw std::runtime_error("Data mismatch!");
+			stat = 0;
+			AllegroCPP::File file_source(file_names[0], "rb"); // original
+			AllegroCPP::File_host host(port_used_in_tcp_test);
+
+			printf_s("[file_reader_test] THREAD#1: Waiting client to connect now.\n");
+			stat = 1;
+
+			auto file_write = host.listen(30000);
+			if (file_write.empty()) throw std::runtime_error("FATAL ERROR: Client never came to test, so failure!");
+
+			auto wrk = make_encrypter(file_write, file_source);
+
+			stat = 2;
+			wrk.start();
+
+			stat = 3;
+			return false;
+		});
+
+		while (step[0] != 1) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+		AllegroCPP::Thread recvr_thr([&] {
+			auto& stat = step[0];
+
+			stat = 0;
+			AllegroCPP::File file_destiny(file_names[2], "wb"); // final
+			AllegroCPP::File_client file_client("localhost", port_used_in_tcp_test);
+
+			if (!file_client || file_client.has_error()) throw std::runtime_error("FATAL ERROR: Cannot create client to connect to host test");
+
+			printf_s("[file_reader_test] THREAD#2: Connected to host. Begin.\n");
+			stat = 1;
+
+			auto wrk = make_decrypter(file_destiny, file_client);
+
+			stat = 2;
+			wrk.start();
+
+			stat = 3;
+			return false;
+		});
+
+		printf_s("[file_reader_test] Waiting for the end...\n");
+		while (step[0] != 3 && step[1] != 3) std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 
-	printf_s("[file_reader_test] Test passed. Removing files and finishing...\n");
+	printf_s("[file_reader_test] ### SOCKET TRANSFER TEST OK!!! ###\n");
+
+	printf_s("[file_reader_test] Tests passed. Cleanup...\n");
 
 	// Passed the test
 	delete[] src_buf;
 	delete[] aft_buf;
 
-	std::remove("test_source.txt");
-	std::remove("test_encrypted.txt");
-	std::remove("test_decrypted.txt");
+	// ensure all
+	std::remove(file_names[0]);
+	std::remove(file_names[1]);
+	std::remove(file_names[2]);
 
 	printf_s("[file_reader_test] Test ended.\n");
 }
