@@ -3,10 +3,23 @@
 
 int main()
 {
-	MainDisplay md;
+	FrontEnd md;
+	bool keep_run = true;
 
-	for(auto now = std::chrono::system_clock().now(); std::chrono::system_clock::now() < now + std::chrono::seconds(10);)
+	while (keep_run)
+	{
 		md.task_draw();
+		const auto ev = md.task_events();
+
+		switch (ev) {
+		case FrontEnd::e_event::APP_CLOSE:
+			keep_run = false;
+			break;
+		default:
+			break;
+		}
+
+	}
 
 //#ifdef _DEBUG
 //	file_reader_test();
