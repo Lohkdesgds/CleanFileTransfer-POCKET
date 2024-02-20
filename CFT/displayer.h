@@ -3,6 +3,8 @@
 #include <AllegroCPP/include/Graphics.h>
 #include <AllegroCPP/include/System.h>
 
+#include "file_reference.h"
+
 class FrontEnd {
 public:
 	enum class e_event {NONE, APP_CLOSE};
@@ -41,6 +43,7 @@ private:
 		AllegroCPP::Bitmap x_btn[2]; // normal, clicked
 		AllegroCPP::Bitmap slider_switch_host_client; // x: 189..305
 		AllegroCPP::Bitmap connect_btn[3]; // Clickable, not clicked, hover after connected
+		AllegroCPP::Bitmap item_frame; // y=888, overlay
 
 		uint8_t x_btn_sel = 0; // 0..1
 		e_connection_status connect_btn_sel = e_connection_status::DISCONNECTED; // 0..1
@@ -49,6 +52,9 @@ private:
 
 		std::string ip_addr = "localhost";
 		e_keyboard_input_targeting kb_target = e_keyboard_input_targeting::NOTHING;
+
+		size_t items_to_send_off_y = 0;
+		std::vector<File_reference> items_to_send;
 
 		display_work();
 		~display_work();

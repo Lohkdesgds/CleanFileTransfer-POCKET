@@ -238,6 +238,7 @@
     <ClCompile Include="..\deps\AllegroCPP\src\vertex.cpp" />
     <ClCompile Include="..\deps\AllegroCPP\src\video.cpp" />
     <ClCompile Include="displayer.cpp" />
+    <ClCompile Include="file_reference.cpp" />
     <ClCompile Include="file_reader.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
@@ -247,6 +248,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="displayer.h" />
+    <ClInclude Include="file_reference.h" />
     <ClInclude Include="file_reader.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>

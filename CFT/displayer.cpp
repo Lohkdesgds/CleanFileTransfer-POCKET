@@ -52,10 +52,11 @@ FrontEnd::FrontEnd() :
 
 	m_draw.x_btn[0] = AllegroCPP::Bitmap(*m_draw.body, 573, 800, 27, 27);
 	m_draw.x_btn[1] = AllegroCPP::Bitmap(*m_draw.body, 573, 827, 27, 27);
-	m_draw.connect_btn[0] = AllegroCPP::Bitmap(*m_draw.body, 0, 845, 163, 45);
-	m_draw.connect_btn[1] = AllegroCPP::Bitmap(*m_draw.body, 0, 801, 163, 45);
-	m_draw.connect_btn[2] = AllegroCPP::Bitmap(*m_draw.body, 0, 889, 163, 45);
-	m_draw.slider_switch_host_client = AllegroCPP::Bitmap(*m_draw.body, 163, 800, 284, 836);
+	m_draw.connect_btn[0] = AllegroCPP::Bitmap(*m_draw.body, 0, 845, 163, 43);
+	m_draw.connect_btn[1] = AllegroCPP::Bitmap(*m_draw.body, 0, 801, 163, 43);
+	m_draw.connect_btn[2] = AllegroCPP::Bitmap(*m_draw.body, 161, 801, 163, 43);
+	m_draw.slider_switch_host_client = AllegroCPP::Bitmap(*m_draw.body, 452, 800, 121, 35);
+	m_draw.item_frame = AllegroCPP::Bitmap(*m_draw.body, 0, 888, 600, 70);
 
 	m_draw.font_24->set_draw_properties({
 		al_map_rgb(255,255,255),
@@ -198,6 +199,12 @@ FrontEnd::e_event FrontEnd::task_events()
 		}
 	}
 		break;
+	case drag_and_drop_event_id:
+	{
+		AllegroCPP::Drop_event ednd(evr);
+		m_draw.items_to_send.push_back(ednd.c_str());
+	}
+		break;
 	}
 	return e_event::NONE;
 }
@@ -226,6 +233,8 @@ void FrontEnd::task_draw()
 		break;
 	}
 	m_draw.slider_switch_host_client.draw();
+
+	// top part
 
 	font28.draw(8, -2, "CleanFileTransfer Ultimate"); // orig: 8, 4. Got: 8, -2. Assume font -= 6
 
@@ -265,13 +274,30 @@ void FrontEnd::task_draw()
 			font24.draw(64, 92, str);
 		}
 	}
+
+	// lower part
+
+	font24.draw(8, 139, "Items to send/receive (drag and drop, auto upload!)");
+
+	
+	for (size_t bb = 0; bb < 9; ++bb)
+	{
+		const size_t expected_p = m_draw.items_to_send_off_y + bb;
+
+		if (expected_p < m_draw.items_to_send.size()) {
+			auto& it = m_draw.items_to_send[expected_p];
+			const auto& path = it.get_path();
+			const auto width = font24.get_width(path);
+			const auto factor = width > 590 ? 590 - width : 0;
+
+			font24.draw(8, 175 + 70 * bb, "#" + std::to_string(expected_p + 1) + " | File in list:");
+			font24.draw(8 + (1.0 + cos(al_get_time() * 0.5)) * factor / 2, 205 + 70 * bb, path); // was y = 170. as it is, 9 in screen at the same time
+			m_draw.item_frame.draw(0, 171 + 70 * bb);
+		}
+		else break;
+	}
 	
 
-
-	//font24.draw(0, 30, "This is 24");
-	//font28.draw(188, 41, "UNDER TESTS");
-
-	//al_draw_filled_rectangle(40, 40, 80, 80, al_map_rgb(255, 255, 0));
 
 	m_disp.flip();
 }
