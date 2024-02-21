@@ -23,6 +23,16 @@ void File_reference::set_progress(double p)
 	m_progress = p;
 }
 
+int File_reference::get_collision_now_for_delete_top_y() const
+{
+	return m_collision_position_now_for_delete_top_y;
+}
+
+void File_reference::set_collision_now_for_delete_top_y(int y)
+{
+	m_collision_position_now_for_delete_top_y = y;
+}
+
 const std::string& File_reference::get_path() const
 {
 	return m_file_path;

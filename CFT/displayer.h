@@ -21,11 +21,15 @@ private:
 	static constexpr int switch_host_client_limits[2][2] = { {189, 42}, {426, 77} };
 	static constexpr int connect_contrl_limits[2][2] = { {432, 37}, {595, 82} };
 	static constexpr int input_address_limits[2][2] = { {59, 91}, {589,125} };
+	static constexpr int items_zone_limits[2][2] = { {0, 170},{600, 800} };
 	static constexpr size_t max_address_length = 256;
+	static constexpr size_t max_items_shown_on_screen = 9;
+	static constexpr size_t item_shown_height = 70; // from bitmap, used @ many places
 
 	AllegroCPP::Display m_disp;
 	AllegroCPP::Event_queue m_evq;
 	AllegroCPP::Event_drag_and_drop m_ev_dnd;
+	AllegroCPP::Timer m_smooth_anims{ 1.0 / 60 };
 
 	struct display_data {
 		std::string ip_addr;
@@ -44,6 +48,9 @@ private:
 		AllegroCPP::Bitmap slider_switch_host_client; // x: 189..305
 		AllegroCPP::Bitmap connect_btn[3]; // Clickable, not clicked, hover after connected
 		AllegroCPP::Bitmap item_frame; // y=888, overlay
+		AllegroCPP::Bitmap x_btn_items; // normal only, simplify please
+
+		AllegroCPP::Bitmap frame_of_items_mask_target; // self created, mask target for items, then drawn
 
 		uint8_t x_btn_sel = 0; // 0..1
 		e_connection_status connect_btn_sel = e_connection_status::DISCONNECTED; // 0..1
@@ -53,18 +60,34 @@ private:
 		std::string ip_addr = "localhost";
 		e_keyboard_input_targeting kb_target = e_keyboard_input_targeting::NOTHING;
 
-		size_t items_to_send_off_y = 0;
+		size_t items_to_send_off_y = 0; // smooth to target
+		size_t items_to_send_off_y_target = 0; // power of item_shown_height
+		size_t items_to_send_temp_from_where_anim = static_cast<size_t>(-1);
+		bool update_frame_of_items_mask_target = true;
 		std::vector<File_reference> items_to_send;
 
 		display_work();
 		~display_work();
 	} m_draw;
 
+	struct delayed_mouse_axes {
+		int m[2] = { 0,0 };
+		int dz_acc = 0;
+		bool had = false;
+
+		void post(ALLEGRO_MOUSE_EVENT);
+		bool consume();
+		void reset();
+	} m_mouse_axes;
+
 	struct drag_functionality {
-		bool is_dragging = false;
+		bool holding_window = false;
+		int offset_screen[2] = { 0,0 };
+		/*bool is_dragging = false;
 		int mouse_dragging_offset[2] = { 0,0 };
 
-		void apply_func_if_needed(AllegroCPP::Display&);
+		void apply_func_if_needed(AllegroCPP::Display&);*/
+		void move_what_is_possible(AllegroCPP::Display&);
 	} m_ev_drag_window;
 
 public:
