@@ -23,6 +23,39 @@ void File_reference::set_progress(double p)
 	m_progress = p;
 }
 
+bool File_reference::get_is_ours() const
+{
+	return is_this_ours;
+}
+
+void File_reference::set_is_ours(const bool b)
+{
+	is_this_ours = b;
+}
+
+bool File_reference::is_hovering() const
+{	
+	return m_hover;
+}
+
+void File_reference::set_if_zero_hovering_prop(int64_t def_prop)
+{
+	if (m_was_hovering_hist_point == 0) m_was_hovering_hist_point = def_prop;
+}
+
+int64_t File_reference::get_hovering_prop() const
+{
+	return m_was_hovering_hist_point;
+}
+
+void File_reference::set_hovering(bool b)
+{
+	m_hover = b;
+	if (!b && m_was_hovering_hist_point > 0) {
+		m_was_hovering_hist_point = 0;
+	}
+}
+
 int File_reference::get_collision_now_for_delete_top_y() const
 {
 	return m_collision_position_now_for_delete_top_y;
@@ -49,4 +82,14 @@ std::string File_reference::get_resumed_name() const
 std::string File_reference::cut_path_to_max(const size_t l) const
 {
 	return (m_file_path.size() > l) ? m_file_path.substr(m_file_path.size() - l) : m_file_path;
+}
+
+bool File_reference::operator==(const std::string& s) const
+{
+	return s == m_file_path;
+}
+
+bool File_reference::operator!=(const std::string& s) const
+{
+	return s != m_file_path;
 }

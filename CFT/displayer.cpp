@@ -9,6 +9,7 @@ FrontEnd::display_work::display_work() :
 	m_font_resource(AllegroCPP::file_load_resource_name_to_temp_file(IDR_FONT1, "FONT_TYPE", ".ttf")),
 	m_body_png_resource(AllegroCPP::file_load_resource_name_to_temp_file(IDR_PNG1, "PNG_TYPE", ".png"))
 {
+	font_20 = new AllegroCPP::Font(20, m_font_resource.clone_for_read());
 	font_24 = new AllegroCPP::Font(24, m_font_resource.clone_for_read());
 	font_28 = new AllegroCPP::Font(27, 28, m_font_resource.clone_for_read());
 	body = new AllegroCPP::Bitmap(m_body_png_resource.clone_for_read(), 1024, 0, ".PNG");
@@ -71,6 +72,12 @@ FrontEnd::FrontEnd() :
 	m_data(),
 	m_draw()
 {
+	AllegroCPP::Monitor_info moninfo;
+	m_screen_time.set_speed(1.0 / (moninfo.m_refresh_rate <= 0 ? 60 : moninfo.m_refresh_rate));
+
+	m_screen_sync << m_screen_time;
+	m_screen_time.start();
+
 	m_evq << m_disp;
 	m_evq << m_ev_dnd;
 	m_evq << AllegroCPP::Event_mouse();
@@ -79,7 +86,11 @@ FrontEnd::FrontEnd() :
 
 	m_draw.x_btn[0] = AllegroCPP::Bitmap(*m_draw.body, 573, 800, 27, 27);
 	m_draw.x_btn[1] = AllegroCPP::Bitmap(*m_draw.body, 573, 827, 27, 27);
-	m_draw.x_btn_items = AllegroCPP::Bitmap(*m_draw.body, 573, 800, 27, 27);
+	m_draw.x_btn_items[0] = AllegroCPP::Bitmap(*m_draw.body, 573, 854, 27, 27);
+	m_draw.x_btn_items[1] = AllegroCPP::Bitmap(*m_draw.body, 546, 854, 27, 27);
+	m_draw.x_btn_items[2] = AllegroCPP::Bitmap(*m_draw.body, 519, 854, 27, 27);
+	m_draw.x_btn_items[3] = AllegroCPP::Bitmap(*m_draw.body, 492, 854, 27, 27);
+	m_draw.x_btn_items[4] = AllegroCPP::Bitmap(*m_draw.body, 465, 854, 27, 27);
 	m_draw.connect_btn[0] = AllegroCPP::Bitmap(*m_draw.body, 0, 845, 163, 43);
 	m_draw.connect_btn[1] = AllegroCPP::Bitmap(*m_draw.body, 0, 801, 163, 43);
 	m_draw.connect_btn[2] = AllegroCPP::Bitmap(*m_draw.body, 161, 801, 163, 43);
@@ -109,6 +120,8 @@ FrontEnd::FrontEnd() :
 
 	m_draw.frame_of_items_mask_target.set_draw_properties({ AllegroCPP::bitmap_position_and_flags{0, 171, 0} });
 
+	al_init_primitives_addon();
+
 	m_disp.make_window_masked(mask_body);
 	m_smooth_anims.start();
 }
@@ -120,15 +133,15 @@ FrontEnd::~FrontEnd()
 constexpr bool is_point_in(const int p[2], const int l[2][2])
 {
 	return
-		p[0] >= l[0][0] && p[0] <= l[1][0] &&
-		p[1] >= l[0][1] && p[1] <= l[1][1];
+		p[0] >= l[0][0] && p[0] < l[1][0] &&
+		p[1] >= l[0][1] && p[1] < l[1][1];
 }
 
 FrontEnd::e_event FrontEnd::task_events()
 {
-	if (!m_evq.has_event()) return e_event::NONE;
+	//if (!m_evq.has_event()) return e_event::NONE;
 
-	auto ev = m_evq.get_next_event();
+	auto ev = m_evq.wait_for_event();
 	if (!ev.valid()) return e_event::NONE;
 
 	const auto& evr = ev.get();
@@ -137,23 +150,32 @@ FrontEnd::e_event FrontEnd::task_events()
 	switch (evr.type) {
 	case ALLEGRO_EVENT_TIMER: // smooth animations!
 	{
+		if (m_draw.connect_btn_sel != e_connection_status::DISCONNECTED) // force block on connected status block
+		{
+			m_draw.kb_target = e_keyboard_input_targeting::NOTHING;
+		}
+
 		// main slider anim
 		if (m_draw.slider_switch_host_client_dir == 1) {
 			if (m_draw.slider_switch_host_client_pos_smooth < 306) {
-				m_draw.slider_switch_host_client_pos_smooth += (m_draw.slider_switch_host_client_pos_smooth < 286) ? 5 : 1;
+				m_draw.slider_switch_host_client_pos_smooth += (m_draw.slider_switch_host_client_pos_smooth < 286) ? 8 : 1;
 				m_draw.slider_switch_host_client.set_draw_property(AllegroCPP::bitmap_position_and_flags{ static_cast<float>(m_draw.slider_switch_host_client_pos_smooth), 41, 0 });
 			}
 		}
 		else {
 			if (m_draw.slider_switch_host_client_pos_smooth > 189) {
-				m_draw.slider_switch_host_client_pos_smooth -= (m_draw.slider_switch_host_client_pos_smooth > 209) ? 5 : 1;
+				m_draw.slider_switch_host_client_pos_smooth -= (m_draw.slider_switch_host_client_pos_smooth > 209) ? 8 : 1;
 				m_draw.slider_switch_host_client.set_draw_property(AllegroCPP::bitmap_position_and_flags{ static_cast<float>(m_draw.slider_switch_host_client_pos_smooth), 41, 0 });
 			}
 		}
 		// item slider y axis move
 		{
-			const size_t factor = 1 + ((m_draw.items_to_send_off_y < m_draw.items_to_send_off_y_target ?
-				m_draw.items_to_send_off_y_target - m_draw.items_to_send_off_y : m_draw.items_to_send_off_y - m_draw.items_to_send_off_y_target)) / 8;
+			const size_t factor = 1 +
+				(
+					m_draw.items_to_send_off_y < m_draw.items_to_send_off_y_target ?
+					m_draw.items_to_send_off_y_target - m_draw.items_to_send_off_y :
+					m_draw.items_to_send_off_y - m_draw.items_to_send_off_y_target
+				) / 4;
 
 			if (m_draw.items_to_send_off_y < m_draw.items_to_send_off_y_target)
 			{
@@ -195,6 +217,23 @@ FrontEnd::e_event FrontEnd::task_events()
 				if (mouse_roll_positive_goes_up < 0 && m_draw.items_to_send.size() - real_idx > max_items_shown_on_screen) m_draw.items_to_send_off_y_target += item_shown_height;
 			}
 
+			{ // in items list now
+				std::lock_guard<std::mutex> l(m_draw.items_to_send_mtx);
+
+				for (size_t bb = 0; bb < max_items_shown_on_screen + 1; ++bb)
+				{
+					const size_t expected_p = (m_draw.items_to_send_off_y / item_shown_height) + bb;
+					if (expected_p >= m_draw.items_to_send.size()) break;
+
+					auto& it = *m_draw.items_to_send[expected_p];
+
+					const int offy = it.get_collision_now_for_delete_top_y();
+					const int test[2][2] = { {0, offy}, {600, offy + static_cast<int>(item_shown_height)} };
+
+					it.set_hovering(is_point_in(mouse_axis, test));
+				}
+			}
+
 			m_mouse_axes.reset();
 		}
 	}
@@ -219,20 +258,35 @@ FrontEnd::e_event FrontEnd::task_events()
 			}
 		}
 		else if (is_point_in(mouse_axis, switch_host_client_limits)) {
-			m_draw.slider_switch_host_client_dir = m_draw.slider_switch_host_client_dir < 0 ? 1 : -1;
+			if (m_draw.connect_btn_sel == e_connection_status::DISCONNECTED) {
+				m_draw.slider_switch_host_client_dir = m_draw.slider_switch_host_client_dir < 0 ? 1 : -1;
+			}
+			else {
+				if (m_draw.slider_switch_host_client_dir < 0) {
+					m_draw.slider_switch_host_client_pos_smooth += 8;
+				}
+				else {
+					m_draw.slider_switch_host_client_pos_smooth -= 8;
+				}
+			}
 		}
 		else if (is_point_in(mouse_axis, connect_contrl_limits)) {
-			uint8_t tmp = static_cast<uint8_t>(m_draw.connect_btn_sel);
-			tmp = (tmp + 1) % 5;
-			m_draw.connect_btn_sel = static_cast<e_connection_status>(tmp);
+			// VERY TEMP PART
+			//uint8_t tmp = static_cast<uint8_t>(m_draw.connect_btn_sel);
+			//tmp = (tmp + 1) % 5;
+			//m_draw.connect_btn_sel = static_cast<e_connection_status>(tmp);
+
+			return m_draw.connect_btn_sel == e_connection_status::DISCONNECTED ? e_event::WANT_CONNECT : e_event::WANT_DISCONNECT;
 		}
 		else { // in items list now
+			std::lock_guard<std::mutex> l(m_draw.items_to_send_mtx);
+
 			for (size_t bb = 0; bb < max_items_shown_on_screen + 1; ++bb)
 			{
 				const size_t expected_p = (m_draw.items_to_send_off_y / item_shown_height) + bb;
 				if (expected_p >= m_draw.items_to_send.size()) break;
 
-				auto& it = m_draw.items_to_send[expected_p];
+				auto& it = *m_draw.items_to_send[expected_p];
 
 				const int offy = it.get_collision_now_for_delete_top_y();
 				const int test[2][2] = { {574, offy}, {600, offy + 27} };
@@ -249,7 +303,10 @@ FrontEnd::e_event FrontEnd::task_events()
 		}
 
 		// keyboard related
-		if (is_point_in(mouse_axis, input_address_limits)) {
+		if (m_draw.connect_btn_sel != e_connection_status::DISCONNECTED) { // full block if connected
+			m_draw.kb_target = e_keyboard_input_targeting::NOTHING;
+		}
+		else if (is_point_in(mouse_axis, input_address_limits)) {
 			m_draw.kb_target = e_keyboard_input_targeting::IP_ADDR;
 		}
 		else {
@@ -285,10 +342,14 @@ FrontEnd::e_event FrontEnd::task_events()
 			m_draw.kb_target = e_keyboard_input_targeting::NOTHING;
 			break;
 		case ALLEGRO_KEY_BACKSPACE:
-			if (m_draw.ip_addr.length() > 0) m_draw.ip_addr.pop_back();
+			if (m_draw.kb_target == e_keyboard_input_targeting::IP_ADDR) {
+				if (m_draw.ip_addr.length() > 0) m_draw.ip_addr.pop_back();
+			}
 			break;
 		default:
-			if (key > 0 && (isalnum(key) || key == ':' || key == '.') && m_draw.ip_addr.length() < max_address_length) m_draw.ip_addr += key;
+			if (m_draw.kb_target == e_keyboard_input_targeting::IP_ADDR) {
+				if (key > 0 && (isalnum(key) || key == ':' || key == '.') && m_draw.ip_addr.length() < max_address_length) m_draw.ip_addr += key;
+			}
 			break;
 		}
 	}
@@ -297,15 +358,25 @@ FrontEnd::e_event FrontEnd::task_events()
 	{
 		m_draw.update_frame_of_items_mask_target = true;
 		AllegroCPP::Drop_event ednd(evr);
-		m_draw.items_to_send.push_back(ednd.c_str());
+		{
+			std::lock_guard<std::mutex> l(m_draw.items_to_send_mtx);
+			auto it = std::find_if(m_draw.items_to_send.begin(), m_draw.items_to_send.end(), [&](const std::shared_ptr<File_reference> fr) {return *fr == ednd.c_str(); });
+			if (it == m_draw.items_to_send.end()) m_draw.items_to_send.push_back(std::make_shared<File_reference>(ednd.c_str()));
+		}
 	}
-		break;
+		return e_event::POSTED_NEW_ITEMS;
 	}
 	return e_event::NONE;
 }
 
 void FrontEnd::task_draw()
 {
+	if (!m_screen_sync.wait_for_event().valid()) return; // wait for sync
+	if (m_screen_sync.has_event()) { // has in queue still?
+		m_screen_sync.flush_event_queue(); // skip
+	}
+
+	auto& font20 = *m_draw.font_20;
 	auto& font24 = *m_draw.font_24;
 	auto& font28 = *m_draw.font_28;
 	auto& body = *m_draw.body;
@@ -383,7 +454,8 @@ void FrontEnd::task_draw()
 		// quick transform to alpha:
 		al_clear_to_color(al_map_rgb(0, 0, 0));
 		al_convert_mask_to_alpha(m_draw.frame_of_items_mask_target, al_map_rgb(0, 0, 0));
-		
+				
+		std::lock_guard<std::mutex> l(m_draw.items_to_send_mtx);
 
 		for (size_t bb = 0; bb < max_items_shown_on_screen + 1; ++bb)
 		{
@@ -392,37 +464,174 @@ void FrontEnd::task_draw()
 
 			if (expected_p >= m_draw.items_to_send.size()) break;
 
-			auto& it = m_draw.items_to_send[expected_p];
-			const auto& path = it.get_path();
-			const auto width = font24.get_width(path);
-			const auto factor = width > 590 ? 590 - width : 0;
+			auto& it = *m_draw.items_to_send[expected_p];
+			auto final_str = "#" + std::to_string(expected_p + 1) + ": " + it.get_path();
+			const auto width = font20.get_width(final_str);
+			const auto factor = width > max_width_text_item ? max_width_text_item - width : 0;
 			const float smooth_mult =  m_draw.items_to_send_temp_from_where_anim != static_cast<size_t>(-1) ? (expected_p < m_draw.items_to_send_temp_from_where_anim ? 1.0f : 0.0f) : 1.0f;
+			const auto off_y_calculated = item_shown_height * bb - off_y * smooth_mult;
+			const auto off_y_if_calculated_neg = off_y_calculated <= 0 ? off_y_calculated : 0;
 
-			font24.draw(
-				8,
-				4 + 70 * bb - off_y * smooth_mult,
-				"#" + std::to_string(expected_p + 1) + ":"
-			);
+			auto masking = AllegroCPP::Bitmap(m_draw.frame_of_items_mask_target,
+				0, off_y_calculated <= 0 ? 0 : off_y_calculated,
+				600, item_shown_height + off_y_if_calculated_neg);
 
-			font24.draw(
-				8 + (1.0 + cos(al_get_time() * 0.5)) * factor / 2,
-				34 + 70 * bb - off_y * smooth_mult,
-				path
-			);
+			masking.set_as_target();
 
-			m_draw.x_btn_items.draw(
-				574,
-				3 + 70 * bb - off_y * smooth_mult
-			);
-			it.set_collision_now_for_delete_top_y(3 + 70 * bb - off_y + 171);
+			if (it.is_hovering()) {
+				al_draw_filled_rectangle(
+					1, 8 /*item_shown_height * bb - off_y * smooth_mult*/,
+					599, item_shown_height /*+ item_shown_height * bb - off_y * smooth_mult*/,
+					al_map_rgb(80, 135, 161)
+				);
+			}
 
-			m_draw.item_frame.draw(0, 70 * bb - off_y * smooth_mult);
+			{
+				int off_x = 0;
+				if (it.is_hovering()) {
+					// factor is the max offset in x. it is negative or zero
+
+					//const int base_off_x = static_cast<int>(al_get_time() * 100 + (expected_p * 8)); // this increases indefinitely
+					//const int ratioed = -(factor - (item_sliding_text_off_px_time * 2)); // calc limit. Positive now
+					//const int limited_base_x = base_off_x % ratioed; // this way we're limiting it. Positive
+					//const int offsetted_x = limited_base_x - item_sliding_text_off_px_time; // offset to negative
+
+					const int64_t time_off = static_cast<int64_t>(al_get_time() * 150 + (expected_p * 8));
+					it.set_if_zero_hovering_prop(time_off);
+
+					const int offsetted_x = (static_cast<int64_t>(time_off - it.get_hovering_prop()) % ((item_sliding_text_off_px_time * 2) - factor)) - item_sliding_text_off_px_time;
+
+
+					if (offsetted_x < 0) off_x = 0;
+					else if (offsetted_x > (-factor)) off_x = factor;
+					else off_x = -offsetted_x; // offset to left, that's why negative
+
+					//off_x = -offsetted_x;
+
+					//printf_s("%lli | %i\n", -off_x, factor);
+
+					//off_x = (item_sliding_text_off_px_time - (static_cast<int64_t>((al_get_time() * 10 + (expected_p * 8)) * factor) % (600 + (item_sliding_text_off_px_time * 2))));
+					// 
+					//if (off_x > 0) off_x = 0;
+					//if (off_x < factor) off_x = factor;
+				}
+				else if (width != 0) {
+					const auto base = "#" + std::to_string(expected_p + 1) + ": ...";
+					final_str = it.get_path();
+					
+					while (font20.get_width(base + final_str) > max_width_text_item && final_str.size()) final_str.erase(final_str.begin());
+					final_str = base + final_str;
+				}
+
+				font20.draw(
+					8 + off_x,
+					6 + off_y_if_calculated_neg,
+					final_str
+				);
+			}
+
+			//font20.draw(
+			//	8.0f + (1.0 + cos(al_get_time() * 0.5)) * static_cast<float>(factor) / 2.0f,
+			//	34 + item_shown_height * bb - off_y * smooth_mult,
+			//	path
+			//);
+
+
+			it.set_collision_now_for_delete_top_y(3 + item_shown_height * bb - off_y + 171);
+
+			{
+				// lower bar to show status even on hover
+
+				const int o = static_cast<int>(cos(al_get_time() * 5 + (expected_p * 3)) * 25);
+
+				switch (it.get_status()) {
+				case File_reference::e_status::READY_TO_SEND:
+					al_draw_filled_rectangle(575, 27, 599, 33, al_map_rgb(179 + o, 179 + o, 179 + o));
+					break;
+				case File_reference::e_status::RECEIVING:
+					al_draw_filled_rectangle(575, 27, 599, 33, al_map_rgb(217 + o, 61 + o, 215 + o));
+					break;
+				case File_reference::e_status::SENDING:
+					al_draw_filled_rectangle(575, 27, 599, 33, al_map_rgb(61 + o, 182 + o, 217 + o));
+					break;
+				case File_reference::e_status::ENDED_TRANSFER:
+					al_draw_filled_rectangle(575, 27, 599, 33, al_map_rgb(62 + o, 218 + o, 64 + o));
+					break;
+				case File_reference::e_status::ERROR_TRASNFER:
+					al_draw_filled_rectangle(575, 27, 599, 33, al_map_rgb(217 + o, 165 + o, 61 + o));
+					break;
+				}
+			}
+
+			// progress bar
+			if (7 + off_y_if_calculated_neg > 0.0f) { // can only draw bar if lower part of it is in screen!
+				float min_y = 3 + off_y_if_calculated_neg;
+				const float max_y = 7 + off_y_if_calculated_neg;
+
+				if (min_y <= 0.0f) min_y = 0.0f;
+
+				al_draw_filled_rectangle(
+					2, min_y,
+					574, max_y,
+					al_map_rgb(36,36,36)
+				);
+
+				const float progress_random = static_cast<float>((cos(al_get_time() + (expected_p * 0.1)) + 1.0) * 0.5) * 572;
+
+				al_draw_filled_rectangle(
+					2, min_y,
+					2 + progress_random, max_y,
+					al_map_rgb(210, 210, 210)
+				);
+			}
+
+			m_draw.item_frame.draw(0, off_y_if_calculated_neg);
+
+			if (it.is_hovering()) {
+				m_draw.x_btn_items[0].draw(573, -1 + off_y_if_calculated_neg);
+			}
+			else {
+				switch (it.get_status()) {
+				case File_reference::e_status::READY_TO_SEND:
+					m_draw.x_btn_items[0].draw(573, -1 + off_y_if_calculated_neg);
+					break;
+				case File_reference::e_status::RECEIVING:
+					m_draw.x_btn_items[1].draw(573, -1 + off_y_if_calculated_neg);
+					break;
+				case File_reference::e_status::SENDING:
+					m_draw.x_btn_items[2].draw(573, -1 + off_y_if_calculated_neg);
+					break;
+				case File_reference::e_status::ENDED_TRANSFER:
+					m_draw.x_btn_items[3].draw(573, -1 + off_y_if_calculated_neg);
+					break;
+				case File_reference::e_status::ERROR_TRASNFER:
+					m_draw.x_btn_items[4].draw(573, -1 + off_y_if_calculated_neg);
+					break;
+				}
+			}
 		}
 
 		m_disp.set_as_target();
 	}
-	
-
 
 	m_disp.flip();
+}
+
+FrontEnd::e_connection_mode FrontEnd::get_connection_mode_selected() const
+{
+	return m_draw.slider_switch_host_client_dir > 0 ? e_connection_mode::CLIENT : e_connection_mode::HOST;
+}
+
+void FrontEnd::set_connection_status(e_connection_status e)
+{
+	m_draw.connect_btn_sel = e;
+}
+
+
+std::shared_ptr<File_reference> FrontEnd::get_next_ready_to_send_ref()
+{
+	for (auto i : m_draw.items_to_send) {
+		if (i->get_status() == File_reference::e_status::READY_TO_SEND) return i;
+	}
+	return {};
 }
