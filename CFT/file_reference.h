@@ -2,9 +2,9 @@
 
 #include <string>
 
-class File_reference {
+class File_reference  {
 public:
-	enum class e_status { READY_TO_SEND, RECEIVING, SENDING, ENDED_TRANSFER, ERROR_TRASNFER };
+	enum class e_status { READY_TO_SEND, RECEIVING, SENDING, ENDED_TRANSFER, ERROR_TRANSFER };
 private:
 	std::string m_file_path; // should not be changed hmm but cannot be const because vector needs copy
 

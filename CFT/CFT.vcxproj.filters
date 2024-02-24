@@ -95,10 +95,19 @@
     <ClCompile Include="..\deps\AllegroCPP\src\video.cpp">
       <Filter>src_ext</Filter>
     </ClCompile>
-    <ClCompile Include="displayer.cpp">
+    <ClCompile Include="app.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="file_reference.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="clickable_bitmap.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="clickable_text.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="app_props.cpp">
       <Filter>src</Filter>
     </ClCompile>
   </ItemGroup>
@@ -121,11 +130,26 @@
     <ClInclude Include="file_reader.h">
       <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="displayer.h">
+    <ClInclude Include="app.h">
       <Filter>include</Filter>
     </ClInclude>
     <ClInclude Include="resource.h" />
     <ClInclude Include="file_reference.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="clickable_bitmap.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="clickable_text.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="clickable.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="clickable.ipp">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="app_props.h">
       <Filter>include</Filter>
     </ClInclude>
   </ItemGroup>

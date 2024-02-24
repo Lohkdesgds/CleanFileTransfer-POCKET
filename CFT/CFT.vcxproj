@@ -237,7 +237,10 @@
     <ClCompile Include="..\deps\AllegroCPP\src\utfstring.cpp" />
     <ClCompile Include="..\deps\AllegroCPP\src\vertex.cpp" />
     <ClCompile Include="..\deps\AllegroCPP\src\video.cpp" />
-    <ClCompile Include="displayer.cpp" />
+    <ClCompile Include="app_props.cpp" />
+    <ClCompile Include="clickable_bitmap.cpp" />
+    <ClCompile Include="clickable_text.cpp" />
+    <ClCompile Include="app.cpp" />
     <ClCompile Include="file_reference.cpp" />
     <ClCompile Include="file_reader.cpp" />
     <ClCompile Include="main.cpp" />
@@ -247,7 +250,12 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="displayer.h" />
+    <ClInclude Include="app_props.h" />
+    <ClInclude Include="clickable.h" />
+    <ClInclude Include="clickable.ipp" />
+    <ClInclude Include="clickable_bitmap.h" />
+    <ClInclude Include="clickable_text.h" />
+    <ClInclude Include="app.h" />
     <ClInclude Include="file_reference.h" />
     <ClInclude Include="file_reader.h" />
     <ClInclude Include="resource.h" />
