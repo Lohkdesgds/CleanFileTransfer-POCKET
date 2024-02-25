@@ -83,3 +83,14 @@ inline e_mouse_states_on_objects ClickableObject<Resource>::get_last_mouse_state
 {
 	return m_last_mouse_state;
 }
+
+template<typename Resource>
+inline bool ClickableObject<Resource>::has_action_in_it(e_actions_object act) const
+{
+	return std::find_if(
+		m_actions_map.begin(),
+		m_actions_map.end(),
+		[&act](const std::pair<e_mouse_states_on_objects, e_actions_object>& i) {
+			return i.second == act;
+		}) != m_actions_map.end();
+}

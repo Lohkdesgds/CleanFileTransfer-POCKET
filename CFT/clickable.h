@@ -8,7 +8,7 @@
 
 #include "file_reference.h"
 
-enum class e_actions_object { NONE, DELETE_SELF, CLOSE_APP };
+enum class e_actions_object { NONE, DELETE_SELF, CLOSE_APP, UNSELECT_ANY_TYPE, TYPE_IPADDR };
 enum class e_mouse_states_on_objects { DEFAULT, HOVER, CLICK, CLICK_END };
 
 using c_state_action_map = std::unordered_map<e_mouse_states_on_objects, e_actions_object>;
@@ -74,6 +74,13 @@ public:
 	/// </summary>
 	/// <returns>Last tasked mouse state on this object</returns>
 	virtual e_mouse_states_on_objects get_last_mouse_state_checked() const;
+
+	/// <summary>
+	/// <para>Check if action is part of this object behavior</para>
+	/// </summary>
+	/// <param name="act">Check for any possibility of this being returned from this object</param>
+	/// <returns>True if this can cause this action</returns>
+	virtual bool has_action_in_it(e_actions_object act) const;
 };
 
 #include "clickable.ipp"

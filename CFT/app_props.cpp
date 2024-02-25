@@ -9,7 +9,7 @@ ItemDisplay::ItemDisplay(const std::string& file_track, const AllegroCPP::Bitmap
 	if (!font_20) throw std::invalid_argument("null arg");
 	//if (!s_refs) s_refs = new static_refs(body_src);
 
-	m_item_name = new ClickableText(font_20, 8, 6, 592, 29, { {e_mouse_states_on_objects::DEFAULT, e_actions_object::NONE} }, file_track);
+	m_item_name = new ClickableText(font_20, 8, 6, 568, 29, { {e_mouse_states_on_objects::DEFAULT, e_actions_object::NONE} }, file_track);
 
 	m_action_btn = new ClickableBitmap(*m_self_ref_for_sub, 573, -1, 27, item_icon_ctl_height, {
 		{e_mouse_states_on_objects::DEFAULT, 27 * (rand() % 4), 0} // change on the fly
@@ -129,40 +129,59 @@ std::vector<ClickableBase*> generate_all_items_in_screen(
 	objs.push_back(new ClickableBitmap(
 		bmp->make_ref(), 0, 0, display_size[0], display_size[1],
 		{ bc{ms::DEFAULT, 0, 0} },
-		{ {ms::DEFAULT, ac::NONE} }
+		{ 
+			{ms::DEFAULT, ac::NONE},
+			{ms::CLICK, ac::UNSELECT_ANY_TYPE} // always reset
+		}
 	));
 
 
 
 	/* Title */
 	objs.push_back(new ClickableText(
-		f28, 8, -2, 1, 1,
+		f28, 8, -2, -1, -1,
 		{ {ms::DEFAULT, ac::NONE} },
 		"CleanFileTransfer Ultimate"
 	));
 
 	/* Static texts ... */
 	objs.push_back(new ClickableText(
-		f28, 16, 42, 1, 1,
+		f28, 16, 42, -1, -1,
 		{ {ms::DEFAULT, ac::NONE} },
 		"Transfer role:"
 	));
 	objs.push_back(new ClickableText(
-		f28, 215, 42, 1, 1,
+		f28, 215, 42, -1, -1,
 		{ {ms::DEFAULT, ac::NONE} },
 		"HOST"
 	));
 	objs.push_back(new ClickableText(
-		f28, 319, 42, 1, 1,
+		f28, 319, 42, -1, -1,
 		{ {ms::DEFAULT, ac::NONE} },
 		"CLIENT"
 	));
 	objs.push_back(new ClickableText(
-		f28, 16, 90, 1, 1,
+		f28, 16, 90, -1, -1,
 		{ {ms::DEFAULT, ac::NONE} },
 		"IP:"
 	));
+	objs.push_back(new ClickableText(
+		f24, 8, 139, -1, -1,
+		{ {ms::DEFAULT, ac::NONE} },
+		"Items to send/receive (drag and drop, auto upload!)"
+	));
 	/* ... static texts*/
+
+	/* variable texts */
+	objs.push_back(new ClickableText(
+		f24, 64, 92, 528, 30, // 588, 92 if bigger than 529
+		{ 
+			{ms::DEFAULT, ac::NONE},
+			{ms::CLICK_END, ac::TYPE_IPADDR} // select if click ends here
+		},
+		"localhost"
+	));
+	/* ...variable texts */
 
 
 	/* Exit button (must be last for security reasons) */

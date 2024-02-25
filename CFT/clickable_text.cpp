@@ -22,9 +22,40 @@ ClickableText::ClickableText(const AllegroCPP::Font* font, int draw_x, int draw_
 		do_map),
 	m_default_font(m_sub_rsc.find(e_mouse_states_on_objects::DEFAULT))
 {
+	m_buf = text;
 	for (auto& i : m_sub_rsc) {
 		i.second->set_draw_property(AllegroCPP::font_position{ static_cast<float>(draw_x), static_cast<float>(draw_y) });
-		i.second->set_draw_property(text);
+		//i.second->set_draw_property(text);
+		if (w > 0 && h > 0) {
+			i.second->set_draw_property(AllegroCPP::font_delimiter_justified{
+				static_cast<float>(w), 0.0f, 0
+			});
+		}
+	}
+	apply_buf(); // easier
+}
+
+std::string& ClickableText::get_buf()
+{
+	return m_buf;
+}
+
+void ClickableText::apply_buf()
+{
+	const int width_max = m_click_zone[1][0] - m_click_zone[0][0];
+	for (auto& i : m_sub_rsc) {
+		if (width_max > 0) {
+			std::string cpy = m_buf;
+			while (1) {
+				auto dim = i.second->get_dimensions(cpy);
+				if (dim.w < width_max || cpy.length() == 0) break;
+				cpy.erase(cpy.begin());
+			}
+			i.second->set_draw_property(cpy);
+		}
+		else {
+			i.second->set_draw_property(m_buf);
+		}
 	}
 }
 

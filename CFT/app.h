@@ -28,11 +28,16 @@ class App {
 		eq_think; // all tasks not related to draw
 
 	AllegroCPP::Timer es_draw_timer{ 1.0 };
+	AllegroCPP::Event_drag_and_drop es_dnd;
 
 	const std::vector<ClickableBase*> m_objects;
 	std::vector<ItemDisplay*> m_item_list;
 	std::recursive_mutex m_item_list_mtx;
 
+	// target for text input
+	ClickableText* m_selected_target_for_text = nullptr;
+
+	bool m_ipaddr_locked = false; // related to m_ipaddr
 	bool m_closed_flag = false;
 
 	void push_item_to_list(const std::string&);

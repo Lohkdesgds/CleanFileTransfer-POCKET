@@ -15,6 +15,10 @@ constexpr int default_monitor_refresh_rate = 240;
 constexpr int height_of_items = 35;
 constexpr int items_y_offset = 171;
 constexpr int item_icon_ctl_height = 33;
+constexpr size_t max_any_text_len = 512;
+
+constexpr int EVENT_DROP_CUSTOM_ID = 1024;
+
 #define DISPLAY_MASK_TRANSPARENT al_map_rgb(255, 0, 255)
 
 

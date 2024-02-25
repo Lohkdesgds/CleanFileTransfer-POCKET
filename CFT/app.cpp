@@ -5,6 +5,7 @@
 void App::push_item_to_list(const std::string& path)
 {
 	std::lock_guard<std::recursive_mutex> l(m_item_list_mtx);
+	for (const auto& i : m_item_list) { if (i->get_file_ref()->get_path() == path) return; }
 	m_item_list.push_back(new ItemDisplay{ path, *m_base_png, m_font20 });
 }
 
@@ -20,6 +21,7 @@ App::App() :
 	m_font20(new AllegroCPP::Font(20, m_font_resource.clone_for_read())),
 	m_font24(new AllegroCPP::Font(24, m_font_resource.clone_for_read())),
 	m_font28(new AllegroCPP::Font(27, 28, m_font_resource.clone_for_read())),
+	es_dnd(m_disp, EVENT_DROP_CUSTOM_ID),
 	m_objects(generate_all_items_in_screen(m_base_png, m_font20, m_font24, m_font28))
 
 {
@@ -34,6 +36,7 @@ App::App() :
 
 	// think queue preparation
 	eq_think << m_disp;
+	eq_think << es_dnd;
 	eq_think << AllegroCPP::Event_mouse();
 	eq_think << AllegroCPP::Event_keyboard();
 
@@ -111,8 +114,11 @@ bool App::think()
 		}
 	};
 
+	const auto evr = ev.get();
+
+
 	// Test stuff
-	switch (ev.get().type) {
+	switch (evr.type) {
 	case ALLEGRO_EVENT_MOUSE_AXES:
 		mouse_check_auto(e_mouse_states_on_objects::HOVER);
 		break;
@@ -121,6 +127,30 @@ bool App::think()
 		break;
 	case ALLEGRO_EVENT_MOUSE_BUTTON_DOWN:
 		mouse_check_auto(e_mouse_states_on_objects::CLICK);
+		break;
+	case ALLEGRO_EVENT_KEY_CHAR:
+		if (!m_selected_target_for_text) break;
+
+		switch (evr.keyboard.keycode) {
+		case ALLEGRO_KEY_ESCAPE: case ALLEGRO_KEY_ENTER: case ALLEGRO_KEY_PAD_ENTER:
+			m_selected_target_for_text = nullptr;
+			break;
+		case ALLEGRO_KEY_BACKSPACE:
+			if (m_selected_target_for_text->get_buf().length() > 0) m_selected_target_for_text->get_buf().pop_back();
+			m_selected_target_for_text->apply_buf();
+			break;
+		default:
+			if (evr.keyboard.unichar > 0 && (isalnum(evr.keyboard.unichar) || evr.keyboard.unichar == ':' || evr.keyboard.unichar == '.') && m_selected_target_for_text->get_buf().length() < max_any_text_len)
+				m_selected_target_for_text->get_buf() += evr.keyboard.unichar;
+			m_selected_target_for_text->apply_buf();
+			break;
+		}
+		break;
+	case EVENT_DROP_CUSTOM_ID:
+		{
+			AllegroCPP::Drop_event ednd(evr);
+			push_item_to_list(ednd.c_str());
+		}
 		break;
 	}
 
@@ -133,6 +163,12 @@ bool App::think()
 			break;
 		case e_actions_object::CLOSE_APP:
 			m_closed_flag = true;
+			break;
+		case e_actions_object::UNSELECT_ANY_TYPE:
+			m_selected_target_for_text = nullptr;
+			break;
+		case e_actions_object::TYPE_IPADDR:
+			if (!m_ipaddr_locked) m_selected_target_for_text = (ClickableText*)(*i.first);
 			break;
 		}
 	}
