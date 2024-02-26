@@ -92,8 +92,10 @@ e_actions_object ItemDisplay::check(const int(&mouse_pos)[2], e_mouse_states_on_
 	//return e_actions_object::NONE;
 }
 
-void ItemDisplay::draw(AllegroCPP::Transform base_transform) const
+void ItemDisplay::draw(const AllegroCPP::Transform& base_transform, const int(&limits)[2][2]) const
 {
+	al_set_clipping_rectangle(limits[0][0], limits[0][1], limits[1][0], limits[1][1]);
+
 	const bool sel = m_overlay->get_last_mouse_state_checked() != e_mouse_states_on_objects::DEFAULT;
 
 	// darken back of item on hover
@@ -109,6 +111,7 @@ void ItemDisplay::draw(AllegroCPP::Transform base_transform) const
 
 	// show trash only if selected, clicked etc
 	if (sel) m_trash_btn->draw();
+	al_set_clipping_rectangle(0, 0, al_get_bitmap_width(al_get_target_bitmap()), al_get_bitmap_height(al_get_target_bitmap()));
 } 
 
 

@@ -2,8 +2,20 @@
 
 #include <allegro5/allegro_primitives.h>
 
+
+void App::think_timed()
+{
+	if (static_cast<size_t>(m_smooth_scroll_target) + max_items_on_screen > m_item_list.size()) m_smooth_scroll_target = static_cast<double>(m_item_list.size() < max_items_on_screen ? 0 : m_item_list.size() - max_items_on_screen);
+	if (m_smooth_scroll_target < 0.0) m_smooth_scroll_target = 0.0;
+
+	m_smooth_scroll = (m_smooth_scroll * smoothness_scroll_y + m_smooth_scroll_target) / (1.0 + smoothness_scroll_y);
+
+	if (fabs(m_smooth_scroll - m_smooth_scroll_target) < 0.01) m_smooth_scroll = m_smooth_scroll_target;
+}
+
 void App::hint_line_set(const std::string& str)
 {
+	if (!m_top_text) return;
 	m_top_text->get_buf() = str;
 	m_top_text->apply_buf();
 }
@@ -45,9 +57,11 @@ App::App() :
 	eq_think << es_dnd;
 	eq_think << AllegroCPP::Event_mouse();
 	eq_think << AllegroCPP::Event_keyboard();
+	eq_think << es_think_timed_stuff;
 
 	// starts
 	es_draw_timer.start();
+	es_think_timed_stuff.start();
 
 	//push_item_to_list("the_test_of_path.txt");
 	for(int i = 0; i < 18; ++i) push_item_to_list("the_" + std::to_string(i) + "_test_of_path.txt");
@@ -73,14 +87,17 @@ bool App::draw()
 	for (const auto& i : m_objects) i->draw();
 
 	AllegroCPP::Transform custom;
+	const size_t offp = static_cast<size_t>(m_smooth_scroll);
 
-	custom.translate(0, items_y_offset);
+	custom.translate(0, items_y_offset - m_smooth_scroll * height_of_items + offp * height_of_items);
 	custom.use();
 
 	{
 		std::lock_guard<std::recursive_mutex> l(m_item_list_mtx);
-		for (const auto& i : m_item_list) {
-			i->draw(custom);
+		//for (const auto& i : m_item_list) {
+		for (size_t p = offp; p < 18 + offp + (m_smooth_scroll != m_smooth_scroll_target ? 1 : 0) && p < m_item_list.size(); ++p) {
+			auto& i = m_item_list[p];
+			i->draw(custom, { {0, 171}, {600, 800 - 171} });
 			custom.translate(0, height_of_items);
 			custom.use();
 		}
@@ -109,7 +126,7 @@ bool App::think()
 
 		int _mouse_fixed[2] = { _mouse_pos[0], _mouse_pos[1] };
 
-		_mouse_fixed[1] -= items_y_offset;
+		_mouse_fixed[1] -= items_y_offset - height_of_items * m_smooth_scroll;
 
 		std::lock_guard<std::recursive_mutex> l(m_item_list_mtx);
 
@@ -122,11 +139,13 @@ bool App::think()
 
 	const auto evr = ev.get();
 
-
 	// Test stuff
 	switch (evr.type) {
 	case ALLEGRO_EVENT_MOUSE_AXES:
 		mouse_check_auto(e_mouse_states_on_objects::HOVER);
+		if (evr.mouse.dz != 0) {
+			m_smooth_scroll_target -= evr.mouse.dz;
+		}
 		break;
 	case ALLEGRO_EVENT_MOUSE_BUTTON_UP:
 		mouse_check_auto(e_mouse_states_on_objects::CLICK_END);
@@ -151,6 +170,9 @@ bool App::think()
 			m_selected_target_for_text->apply_buf();
 			break;
 		}
+		break;
+	case ALLEGRO_EVENT_TIMER:
+		think_timed();
 		break;
 	case EVENT_DROP_CUSTOM_ID:
 		{
@@ -283,8 +305,8 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 		{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1} },
 		{	{ms::CLICK_END, [&, _text_host_client_switch] {
 				if (m_closed_flag) return;
-				if (m_is_host = !m_is_host) _text_host_client_switch->get_buf() = " HOST ";
-				else					    _text_host_client_switch->get_buf() = "CLIENT";
+				if (m_is_host = !m_is_host) { _text_host_client_switch->get_buf() = " HOST "; hint_line_set("Became host. Hosting from now on!");}
+				else					    { _text_host_client_switch->get_buf() = "CLIENT"; hint_line_set("Became client. Trying to connect asynchronously.");}
 				_text_host_client_switch->apply_buf();
 			}}
 		}
@@ -292,7 +314,12 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 	objs.push_back(new ClickableBitmap(
 		bmp->make_ref(), 555, 43, 32, 32,
 		{ bc{ms::DEFAULT, 134, 800}, bc{ms::CUSTOM_1, 134, 832} },
-		{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1} }
+		{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1} },
+		{	{ms::CLICK_END, [&] {
+				if (m_is_send_receive_enabled = !m_is_send_receive_enabled) hint_line_set("Enabled send/receive! Tasking asynchronously.");
+				else														hint_line_set("Not receiving or sending new things anymore. Closing remaining connections, if any.");
+			}}
+		}
 	));
 	/* ...variable overlays */
 
@@ -304,7 +331,7 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 		{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::CLOSE_APP} }
 	));
 
-	hint_line_set("Trying to do a connection (indefinitely)... This is a huge text  9674wtyuirghknsjf84ywrnfy8i9w4ormnyw3489eis");
+	hint_line_set("Ready!");
 
 	return objs;
 }

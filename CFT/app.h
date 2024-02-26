@@ -27,7 +27,7 @@ class App {
 		eq_draw, // so it always be vsync or less
 		eq_think; // all tasks not related to draw
 
-	AllegroCPP::Timer es_draw_timer{ 1.0 };
+	AllegroCPP::Timer es_draw_timer{ 1.0 }, es_think_timed_stuff{ 1.0 / 60 };
 	AllegroCPP::Event_drag_and_drop es_dnd;
 
 	const std::vector<ClickableBase*> m_objects;
@@ -38,11 +38,18 @@ class App {
 	ClickableText* m_selected_target_for_text = nullptr;
 
 	// Debug info:
-	ClickableText* m_top_text = nullptr;
+	ClickableText* m_top_text;
+
+	// smooth listing
+	double m_smooth_scroll = 0.0; // follows m_smooth_scroll_target
+	double m_smooth_scroll_target = 0.0; // absolute pos, related to m_item_list.size()
 
 	bool m_ipaddr_locked = false; // related to m_ipaddr
 	bool m_is_host = true;
+	bool m_is_send_receive_enabled = true;
 	bool m_closed_flag = false;
+
+	void think_timed();
 
 	void hint_line_set(const std::string&);
 	void push_item_to_list(const std::string&);

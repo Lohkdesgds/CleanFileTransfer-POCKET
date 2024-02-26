@@ -99,10 +99,21 @@ void ClickableText::draw(AllegroCPP::Transform base_transform) const
 		float dx = 0.f, dy = 0.f; // off 1 + real val
 		base_transform.transform_coordinates(dx, dy);
 
-		al_set_clipping_rectangle(
-			m_click_zone[0][0] + dx, m_click_zone[0][1] + dy,
+		int o_x, o_y, o_w, o_h;
+		al_get_clipping_rectangle(&o_x, &o_y, &o_w, &o_h);
+
+		const int ps[4] = {
+			m_click_zone[0][0] + static_cast<int>(dx),
+			m_click_zone[0][1] + static_cast<int>(dy),
 			m_click_zone[1][0] - m_click_zone[0][0],
 			m_default_font->second->get_line_height()
+		};
+
+		al_set_clipping_rectangle(
+			ps[0] > o_x ? ps[0] : o_x,
+			ps[1] > o_y ? ps[1] : o_y,
+			ps[2] + ps[0] < o_x + o_w ? ps[2] : o_w,
+			ps[3] + ps[1] < o_y + o_h ? ps[3] : o_h
 		);
 
 		custom_transform.translate(- translate_needed, 0);
@@ -111,7 +122,7 @@ void ClickableText::draw(AllegroCPP::Transform base_transform) const
 		m_default_font->second->draw();
 		base_transform.use();
 
-		al_set_clipping_rectangle(0, 0, al_get_bitmap_width(al_get_target_bitmap()), al_get_bitmap_height(al_get_target_bitmap()));
+		al_set_clipping_rectangle(o_x, o_y, o_w, o_h);
 	}
 	else m_default_font->second->draw();
 

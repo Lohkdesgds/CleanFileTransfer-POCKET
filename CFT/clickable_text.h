@@ -18,5 +18,5 @@ public:
 	void apply_buf();
 
 	virtual void draw() const;
-	virtual void draw(AllegroCPP::Transform) const;
+	virtual void draw(AllegroCPP::Transform base_transform) const;
 };

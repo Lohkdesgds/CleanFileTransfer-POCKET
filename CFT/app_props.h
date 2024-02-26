@@ -12,10 +12,12 @@
 
 constexpr int display_size[2] = { 600, 800 };
 constexpr int default_monitor_refresh_rate = 240;
-constexpr int height_of_items = 35;
+constexpr int height_of_items = 35; // related to max items on screen
+constexpr size_t max_items_on_screen = 18; // related to height
 constexpr int items_y_offset = 171;
 constexpr int item_icon_ctl_height = 33;
 constexpr size_t max_any_text_len = 512;
+constexpr double smoothness_scroll_y = 7.0; // current = (target * this + current) / (this + 1)
 
 constexpr int EVENT_DROP_CUSTOM_ID = 1024;
 
@@ -60,5 +62,5 @@ public:
 	std::shared_ptr<File_reference> get_file_ref() const;
 	
 	e_actions_object check(const int(&mouse_pos)[2], e_mouse_states_on_objects mouse_state);
-	void draw(AllegroCPP::Transform base_transform) const;
+	void draw(const AllegroCPP::Transform& base_transform, const int(&limits)[2][2]) const;
 };
