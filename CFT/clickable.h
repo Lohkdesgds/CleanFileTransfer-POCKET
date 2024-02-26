@@ -8,11 +8,28 @@
 
 #include "file_reference.h"
 
-enum class e_actions_object { NONE, DELETE_SELF, CLOSE_APP, UNSELECT_ANY_TYPE, TYPE_IPADDR };
-enum class e_mouse_states_on_objects { DEFAULT, HOVER, CLICK, CLICK_END };
+enum class e_actions_object { 
+	NONE, // does nothing
+	CLOSE_APP, // close the app
+
+	DELETE_SELF, // on a list, remove itself
+
+	UNSELECT_WRITE, // unselects pointer, goes to null
+	SELECT_FOR_WRITE, // select this as target for keyboard
+
+	BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1 // used with state CUSTOM_1 for toggle behavior. Toggles CUSTOM_1 with DEFAULT
+};
+enum class e_mouse_states_on_objects { 
+	DEFAULT,
+	HOVER,
+	CLICK,
+	CLICK_END,
+	CUSTOM_1
+};
 
 using c_state_action_map = std::unordered_map<e_mouse_states_on_objects, e_actions_object>;
 template<typename Resource> using c_state_resource_map = std::unordered_map<e_mouse_states_on_objects, Resource>;
+using c_state_triggered_functional_map = std::unordered_map<e_mouse_states_on_objects, std::function<void(void)>>;
 
 class ClickableBase {
 public:
@@ -38,13 +55,16 @@ public:
 	struct cuts { e_mouse_states_on_objects on_state; Resource use_this; };
 protected:
 	c_state_resource_map<Resource> m_sub_rsc;
+	c_state_triggered_functional_map m_fcn_map;
 
 	const c_state_action_map m_actions_map; // const map for mapping actions to resources
 	const int m_click_zone[2][2]; // auto generate based on m_sub_rsc pos + subpart offset
 
 	e_mouse_states_on_objects m_last_mouse_state = e_mouse_states_on_objects::DEFAULT;
+
+	virtual void check_for_change_and_call_fcn(e_mouse_states_on_objects new_state_to_save);
 public:
-	ClickableObject(int draw_x, int draw_y, int w, int h, std::vector<cuts> cuts, c_state_action_map do_map);
+	ClickableObject(int draw_x, int draw_y, int w, int h, std::vector<cuts> cuts, c_state_action_map do_map, c_state_triggered_functional_map fcn_map = {});
 
 	virtual e_actions_object check(const int(&mouse_pos)[2], e_mouse_states_on_objects mouse_state);
 
@@ -81,6 +101,13 @@ public:
 	/// <param name="act">Check for any possibility of this being returned from this object</param>
 	/// <returns>True if this can cause this action</returns>
 	virtual bool has_action_in_it(e_actions_object act) const;
+
+	/// <summary>
+	/// <para>Set a function to be triggered at mouse state change on this object to this state</para>
+	/// </summary>
+	/// <param name="mouse_state">Changing to this state will trigger the function</param>
+	/// <param name="fcn">Function to be triggered (or set to {} to remove it)</param>
+	virtual void set_function_on_state_changing_to(e_mouse_states_on_objects mouse_state, std::function<void(void)> fcn = {});
 };
 
 #include "clickable.ipp"

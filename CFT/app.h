@@ -38,6 +38,7 @@ class App {
 	ClickableText* m_selected_target_for_text = nullptr;
 
 	bool m_ipaddr_locked = false; // related to m_ipaddr
+	bool m_is_host = true;
 	bool m_closed_flag = false;
 
 	void push_item_to_list(const std::string&);
@@ -47,6 +48,9 @@ public:
 
 	bool draw();
 	bool think();
+
+private:
+	std::vector<ClickableBase*> _generate_all_items_in_screen();
 };
 
 

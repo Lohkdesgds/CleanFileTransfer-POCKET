@@ -62,8 +62,3 @@ public:
 	e_actions_object check(const int(&mouse_pos)[2], e_mouse_states_on_objects mouse_state);
 	void draw() const;
 };
-
-
-// Functions:
-
-std::vector<ClickableBase*> generate_all_items_in_screen(AllegroCPP::Bitmap* bmp, AllegroCPP::Font* f20, AllegroCPP::Font* f24, AllegroCPP::Font* f28);

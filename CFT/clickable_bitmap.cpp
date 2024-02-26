@@ -13,14 +13,15 @@ static std::vector<ClickableObject<AllegroCPP::Bitmap*>::cuts> bitmap_cuts_to_te
 	return m;
 }
 
-ClickableBitmap::ClickableBitmap(const AllegroCPP::Bitmap& body_src, int draw_x, int draw_y, int w, int h, std::vector<bitmap_cuts> cuts, c_state_action_map do_map) : 
+ClickableBitmap::ClickableBitmap(const AllegroCPP::Bitmap& body_src, int draw_x, int draw_y, int w, int h, std::vector<bitmap_cuts> cuts, c_state_action_map do_map, c_state_triggered_functional_map fcn_map) :
 	ClickableObject<AllegroCPP::Bitmap*>(
 		draw_x,
 		draw_y,
 		w,
 		h,
 		bitmap_cuts_to_template_cut(body_src, w, h, cuts),
-		do_map)
+		do_map,
+		fcn_map)
 {
 	for (auto& i : m_sub_rsc) {
 		i.second->set_draw_property(AllegroCPP::bitmap_position_and_flags{ static_cast<float>(draw_x), static_cast<float>(draw_y), 0 });

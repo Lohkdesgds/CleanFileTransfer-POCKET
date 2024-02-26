@@ -22,7 +22,7 @@ App::App() :
 	m_font24(new AllegroCPP::Font(24, m_font_resource.clone_for_read())),
 	m_font28(new AllegroCPP::Font(27, 28, m_font_resource.clone_for_read())),
 	es_dnd(m_disp, EVENT_DROP_CUSTOM_ID),
-	m_objects(generate_all_items_in_screen(m_base_png, m_font20, m_font24, m_font28))
+	m_objects(_generate_all_items_in_screen())
 
 {
 	al_init_primitives_addon();
@@ -164,10 +164,10 @@ bool App::think()
 		case e_actions_object::CLOSE_APP:
 			m_closed_flag = true;
 			break;
-		case e_actions_object::UNSELECT_ANY_TYPE:
+		case e_actions_object::UNSELECT_WRITE:
 			m_selected_target_for_text = nullptr;
 			break;
-		case e_actions_object::TYPE_IPADDR:
+		case e_actions_object::SELECT_FOR_WRITE:
 			if (!m_ipaddr_locked) m_selected_target_for_text = (ClickableText*)(*i.first);
 			break;
 		}
@@ -189,6 +189,101 @@ bool App::think()
 
 
 	return !m_closed_flag;
+}
+
+std::vector<ClickableBase*> App::_generate_all_items_in_screen()
+{
+	AllegroCPP::Bitmap*& bmp = m_base_png;
+	AllegroCPP::Font*& f20 = m_font20;
+	AllegroCPP::Font*& f24 = m_font24;
+	AllegroCPP::Font*& f28 = m_font28;
+
+	using bc = ClickableBitmap::bitmap_cuts;
+	using ms = e_mouse_states_on_objects;
+	using ac = e_actions_object;
+
+	std::vector<ClickableBase*> objs;
+
+	// Used later in references
+	ClickableText* _text_host_client_switch = nullptr;
+
+	/* Body */
+	objs.push_back(new ClickableBitmap(
+		bmp->make_ref(), 0, 0, display_size[0], display_size[1],
+		{ bc{ms::DEFAULT, 0, 0} },
+		{ 
+			{ms::DEFAULT, ac::NONE},
+			{ms::CLICK, ac::UNSELECT_WRITE} // always reset
+		}
+	));
+
+
+
+	/* Title */
+	objs.push_back(new ClickableText(
+		f28, 8, -2, -1, -1,
+		{ {ms::DEFAULT, ac::NONE} },
+		"CleanFileTransfer Ultimate"
+	));
+
+	/* Static texts ... */
+	objs.push_back(new ClickableText(
+		f28, 16, 42, -1, -1,
+		{ {ms::DEFAULT, ac::NONE} },
+		"Transfer role:"
+	));
+	objs.push_back(_text_host_client_switch = new ClickableText(
+		f28, 208, 42, -1, -1,
+		{ {ms::DEFAULT, ac::NONE} },
+		" HOST " // changes to client later if clicked hmm
+	));	
+	objs.push_back(new ClickableText(
+		f28, 16, 90, -1, -1,
+		{ {ms::DEFAULT, ac::NONE} },
+		"IP:"
+	));
+	objs.push_back(new ClickableText(
+		f24, 8, 139, -1, -1,
+		{ {ms::DEFAULT, ac::NONE} },
+		"Items to send/receive (drag and drop, auto upload!)"
+	));
+	/* ... static texts*/
+
+	/* variable texts */
+	objs.push_back(new ClickableText(
+		f24, 64, 92, 528, 30, // 588, 92 if bigger than 529
+		{ 
+			{ms::DEFAULT, ac::NONE},
+			{ms::CLICK_END, ac::SELECT_FOR_WRITE} // select if click ends here
+		},
+		"localhost"
+	));
+	/* ...variable texts */
+
+	/* variable overlays */
+	objs.push_back(new ClickableBitmap(
+		bmp->make_ref(), 187, 40, 133, 38,
+		{ bc{ms::DEFAULT, 0, 800}, bc{ms::CUSTOM_1, 0, 838} },
+		{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1} },
+		{	{ms::CLICK_END, [&, _text_host_client_switch] {
+				if (m_closed_flag) return;
+				if (m_is_host = !m_is_host) _text_host_client_switch->get_buf() = " HOST ";
+				else					    _text_host_client_switch->get_buf() = "CLIENT";
+				_text_host_client_switch->apply_buf();
+			}}
+		}
+	));
+	/* ...variable overlays */
+
+
+	/* Exit button (must be last for security reasons) */
+	objs.push_back(new ClickableBitmap(
+		bmp->make_ref(), 572, 2, 27, 27,
+		{ bc{ms::DEFAULT, 573, 800}, bc{ms::HOVER, 573, 827}, bc{ms::CLICK, 573, 827}, bc{ms::CLICK_END, 573, 827} },
+		{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::CLOSE_APP} }
+	));
+
+	return objs;
 }
 
 //const ALLEGRO_COLOR FrontEnd::mask_body = al_map_rgb(255, 0, 255);

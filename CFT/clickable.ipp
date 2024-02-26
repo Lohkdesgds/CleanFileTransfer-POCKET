@@ -13,9 +13,19 @@ constexpr static bool is_in(const int(&p)[2], const int(&l)[2][2])
 
 
 template<typename Resource>
-inline ClickableObject<Resource>::ClickableObject(int draw_x, int draw_y, int w, int h, std::vector<ClickableObject<Resource>::cuts> cuts, c_state_action_map do_map) :
+inline void ClickableObject<Resource>::check_for_change_and_call_fcn(e_mouse_states_on_objects new_state_to_save)
+{
+	if (new_state_to_save == m_last_mouse_state) return;
+	m_last_mouse_state = new_state_to_save;
+	const auto it = m_fcn_map.find(m_last_mouse_state);
+	if (it != m_fcn_map.end()) (it->second)();
+}
+
+template<typename Resource>
+inline ClickableObject<Resource>::ClickableObject(int draw_x, int draw_y, int w, int h, std::vector<ClickableObject<Resource>::cuts> cuts, c_state_action_map do_map, c_state_triggered_functional_map fcn_map) :
 	//m_sub_bmp(body_src, x, y, w, h),
 	m_actions_map(do_map),
+	m_fcn_map(fcn_map),
 	m_click_zone{ {draw_x, draw_y}, {draw_x + w, draw_y + h} }
 {
 	if (cuts.size() == 0)
@@ -39,14 +49,30 @@ inline e_actions_object ClickableObject<Resource>::check(const int(&mouse_pos)[2
 	if (mouse_state == e_mouse_states_on_objects::DEFAULT) throw std::invalid_argument("mouse_state on ClickableBitmap cannot be DEFAULT.");
 
 	if (!is_in(mouse_pos, m_click_zone)) {
-		m_last_mouse_state = e_mouse_states_on_objects::DEFAULT;
+		check_for_change_and_call_fcn(e_mouse_states_on_objects::DEFAULT);
 		return e_actions_object::NONE;
 	}
 
-	m_last_mouse_state = mouse_state;
+	check_for_change_and_call_fcn(mouse_state);
 
 	const auto it = m_actions_map.find(mouse_state);
 	if (it == m_actions_map.end()) return e_actions_object::NONE;
+
+	switch (it->second) {
+	case e_actions_object::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1:
+	{
+		auto a = m_sub_rsc.find(e_mouse_states_on_objects::DEFAULT);
+		auto b = m_sub_rsc.find(e_mouse_states_on_objects::CUSTOM_1);
+
+		if (b == m_sub_rsc.end() || a == m_sub_rsc.end()) break;
+
+		std::swap(a->second, b->second);
+	}
+		break;
+	default:
+		break;
+	}
+
 	return it->second;
 }
 
@@ -93,4 +119,16 @@ inline bool ClickableObject<Resource>::has_action_in_it(e_actions_object act) co
 		[&act](const std::pair<e_mouse_states_on_objects, e_actions_object>& i) {
 			return i.second == act;
 		}) != m_actions_map.end();
+}
+
+template<typename Resource>
+inline void ClickableObject<Resource>::set_function_on_state_changing_to(e_mouse_states_on_objects mouse_state, std::function<void(void)> fcn)
+{
+	if (fcn) {
+		m_fcn_map[mouse_state] = fcn;
+	}
+	else {
+		auto it = m_fcn_map.find(mouse_state);
+		if (it != m_fcn_map.end()) m_fcn_map.erase(it);
+	}
 }
