@@ -37,10 +37,14 @@ class App {
 	// target for text input
 	ClickableText* m_selected_target_for_text = nullptr;
 
+	// Debug info:
+	ClickableText* m_top_text = nullptr;
+
 	bool m_ipaddr_locked = false; // related to m_ipaddr
 	bool m_is_host = true;
 	bool m_closed_flag = false;
 
+	void hint_line_set(const std::string&);
 	void push_item_to_list(const std::string&);
 public:
 	App();

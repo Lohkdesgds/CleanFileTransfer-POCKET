@@ -60,5 +60,5 @@ public:
 	std::shared_ptr<File_reference> get_file_ref() const;
 	
 	e_actions_object check(const int(&mouse_pos)[2], e_mouse_states_on_objects mouse_state);
-	void draw() const;
+	void draw(AllegroCPP::Transform base_transform) const;
 };

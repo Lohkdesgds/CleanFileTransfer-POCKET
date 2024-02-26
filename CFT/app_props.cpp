@@ -9,7 +9,7 @@ ItemDisplay::ItemDisplay(const std::string& file_track, const AllegroCPP::Bitmap
 	if (!font_20) throw std::invalid_argument("null arg");
 	//if (!s_refs) s_refs = new static_refs(body_src);
 
-	m_item_name = new ClickableText(font_20, 8, 6, 568, 29, { {e_mouse_states_on_objects::DEFAULT, e_actions_object::NONE} }, file_track);
+	m_item_name = new ClickableText(font_20, 0, 6, 568, 29, { {e_mouse_states_on_objects::DEFAULT, e_actions_object::NONE} }, " " + file_track);
 
 	m_action_btn = new ClickableBitmap(*m_self_ref_for_sub, 573, -1, 27, item_icon_ctl_height, {
 		{e_mouse_states_on_objects::DEFAULT, 27 * (rand() % 4), 0} // change on the fly
@@ -92,14 +92,14 @@ e_actions_object ItemDisplay::check(const int(&mouse_pos)[2], e_mouse_states_on_
 	//return e_actions_object::NONE;
 }
 
-void ItemDisplay::draw() const
+void ItemDisplay::draw(AllegroCPP::Transform base_transform) const
 {
 	const bool sel = m_overlay->get_last_mouse_state_checked() != e_mouse_states_on_objects::DEFAULT;
 
 	// darken back of item on hover
 	if (sel) al_draw_filled_rectangle(0, 0, 600, height_of_items, al_map_rgba(49, 49, 49, 50));
 
-	m_item_name->draw();
+	m_item_name->draw(base_transform);
 	m_action_btn->draw();
 	
 	// animate action with glow

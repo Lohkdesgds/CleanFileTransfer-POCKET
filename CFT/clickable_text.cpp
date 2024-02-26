@@ -43,24 +43,76 @@ std::string& ClickableText::get_buf()
 
 void ClickableText::apply_buf()
 {
-	const int width_max = m_click_zone[1][0] - m_click_zone[0][0];
+	//m_last_apply = al_get_time();
+	//const int width_max = m_click_zone[1][0] - m_click_zone[0][0];
+
 	for (auto& i : m_sub_rsc) {
-		if (width_max > 0) {
-			std::string cpy = m_buf;
-			while (1) {
-				auto dim = i.second->get_dimensions(cpy);
-				if (dim.w < width_max || cpy.length() == 0) break;
-				cpy.erase(cpy.begin());
-			}
-			i.second->set_draw_property(cpy);
-		}
-		else {
-			i.second->set_draw_property(m_buf);
-		}
+		//if (width_max > 0) {
+		//	std::string cpy = m_buf;
+		//	//const int current_max_width = i.second->get_dimensions(cpy).w;
+		//	//const int calculated_width_to_work_with = current_max_width - width_max;
+		//	const int remove_front_every = (fmod(al_get_time(), 10.0) / 10.0) * 20;
+		//
+		//
+		//	for (int c = 0;;) {
+		//		auto dim = i.second->get_dimensions(cpy);
+		//		if (dim.w < width_max || cpy.length() == 0) break;
+		//
+		//		if (++c < remove_front_every) {
+		//			cpy.erase(cpy.begin());
+		//		}
+		//		else {
+		//			cpy.pop_back();
+		//			c = 0;
+		//		}
+		//	}
+		//	i.second->set_draw_property(cpy);
+		//}
+		//else {
+		i.second->set_draw_property(m_buf);
+		//}
 	}
+	m_buf_set = m_buf;
 }
 
 void ClickableText::draw() const
 {
-	m_default_font->second->draw();
+	draw({});
+}
+
+void ClickableText::draw(AllegroCPP::Transform base_transform) const
+{
+	//if (al_get_time() - m_last_apply > time_seconds_between_auto_applies) apply_buf();
+	const int width_max = m_click_zone[1][0] - m_click_zone[0][0];
+	const auto targ_d = m_default_font->second->get_dimensions(m_buf_set);
+
+
+	if (targ_d.w > width_max && width_max > 0) {
+		const double diff = (targ_d.w - width_max);
+
+		// 0..1
+		const double translate_needed =
+			std::max(0.0, std::min((fmod(al_get_time() * 60.0, diff + 140.0)) - 70.0, diff));
+
+		AllegroCPP::Transform custom_transform = base_transform;
+
+		float dx = 0.f, dy = 0.f; // off 1 + real val
+		base_transform.transform_coordinates(dx, dy);
+
+		al_set_clipping_rectangle(
+			m_click_zone[0][0] + dx, m_click_zone[0][1] + dy,
+			m_click_zone[1][0] - m_click_zone[0][0],
+			m_default_font->second->get_line_height()
+		);
+
+		custom_transform.translate(- translate_needed, 0);
+
+		custom_transform.use();
+		m_default_font->second->draw();
+		base_transform.use();
+
+		al_set_clipping_rectangle(0, 0, al_get_bitmap_width(al_get_target_bitmap()), al_get_bitmap_height(al_get_target_bitmap()));
+	}
+	else m_default_font->second->draw();
+
 }

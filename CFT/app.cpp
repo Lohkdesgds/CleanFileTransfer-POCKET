@@ -2,6 +2,12 @@
 
 #include <allegro5/allegro_primitives.h>
 
+void App::hint_line_set(const std::string& str)
+{
+	m_top_text->get_buf() = str;
+	m_top_text->apply_buf();
+}
+
 void App::push_item_to_list(const std::string& path)
 {
 	std::lock_guard<std::recursive_mutex> l(m_item_list_mtx);
@@ -74,7 +80,7 @@ bool App::draw()
 	{
 		std::lock_guard<std::recursive_mutex> l(m_item_list_mtx);
 		for (const auto& i : m_item_list) {
-			i->draw();
+			i->draw(custom);
 			custom.translate(0, height_of_items);
 			custom.use();
 		}
@@ -223,7 +229,12 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 	objs.push_back(new ClickableText(
 		f28, 8, -2, -1, -1,
 		{ {ms::DEFAULT, ac::NONE} },
-		"CleanFileTransfer Ultimate"
+		"CFT Ultimate"
+	));
+	objs.push_back(m_top_text = new ClickableText(
+		f20, 185, 3, 383, -1,
+		{ {ms::DEFAULT, ac::NONE} },
+		"Loading..."
 	));
 
 	/* Static texts ... */
@@ -236,7 +247,12 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 		f28, 208, 42, -1, -1,
 		{ {ms::DEFAULT, ac::NONE} },
 		" HOST " // changes to client later if clicked hmm
-	));	
+	));
+	objs.push_back(new ClickableText(
+		f28, 335, 42, -1, -1,
+		{ {ms::DEFAULT, ac::NONE} },
+		"Send/receive on?"
+	));
 	objs.push_back(new ClickableText(
 		f28, 16, 90, -1, -1,
 		{ {ms::DEFAULT, ac::NONE} },
@@ -245,7 +261,7 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 	objs.push_back(new ClickableText(
 		f24, 8, 139, -1, -1,
 		{ {ms::DEFAULT, ac::NONE} },
-		"Items to send/receive (drag and drop, auto upload!)"
+		"Items to send / being downloaded (drag and drop!)"
 	));
 	/* ... static texts*/
 
@@ -273,6 +289,11 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 			}}
 		}
 	));
+	objs.push_back(new ClickableBitmap(
+		bmp->make_ref(), 555, 43, 32, 32,
+		{ bc{ms::DEFAULT, 134, 800}, bc{ms::CUSTOM_1, 134, 832} },
+		{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1} }
+	));
 	/* ...variable overlays */
 
 
@@ -282,6 +303,8 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 		{ bc{ms::DEFAULT, 573, 800}, bc{ms::HOVER, 573, 827}, bc{ms::CLICK, 573, 827}, bc{ms::CLICK_END, 573, 827} },
 		{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::CLOSE_APP} }
 	));
+
+	hint_line_set("Trying to do a connection (indefinitely)... This is a huge text  9674wtyuirghknsjf84ywrnfy8i9w4ormnyw3489eis");
 
 	return objs;
 }
