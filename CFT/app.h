@@ -62,6 +62,16 @@ public:
 
 private:
 	std::vector<ClickableBase*> _generate_all_items_in_screen();
+
+	struct window_drag_wrk {
+		static constexpr int grab_window_limits[2][2] = { {0, 0}, {600, 30} };
+
+		bool holding_window = false;
+		int offset_screen[2] = { 0,0 };
+		
+		void auto_event(const ALLEGRO_EVENT&);
+		void auto_think(AllegroCPP::Display& d);
+	} m_d_drag_auto;
 };
 
 

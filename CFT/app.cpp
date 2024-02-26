@@ -11,6 +11,8 @@ void App::think_timed()
 	m_smooth_scroll = (m_smooth_scroll * smoothness_scroll_y + m_smooth_scroll_target) / (1.0 + smoothness_scroll_y);
 
 	if (fabs(m_smooth_scroll - m_smooth_scroll_target) < 0.01) m_smooth_scroll = m_smooth_scroll_target;
+
+	m_d_drag_auto.auto_think(m_disp);
 }
 
 void App::hint_line_set(const std::string& str)
@@ -140,6 +142,8 @@ bool App::think()
 	const auto evr = ev.get();
 
 	// Test stuff
+	m_d_drag_auto.auto_event(evr);
+
 	switch (evr.type) {
 	case ALLEGRO_EVENT_MOUSE_AXES:
 		mouse_check_auto(e_mouse_states_on_objects::HOVER);
@@ -335,6 +339,47 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 
 	return objs;
 }
+
+
+void App::window_drag_wrk::auto_event(const ALLEGRO_EVENT& ev)
+{
+	static const auto check_in = [](const int(&p)[2], const int(&l)[2][2]) {
+		return
+			p[0] >= l[0][0] && p[0] < l[1][0] &&
+			p[1] >= l[0][1] && p[1] < l[1][1];
+	};
+
+	switch (ev.type) {
+	case ALLEGRO_EVENT_MOUSE_BUTTON_DOWN:
+		if (check_in({ev.mouse.x, ev.mouse.y}, grab_window_limits)) {
+			holding_window = true;
+			offset_screen[0] = AllegroCPP::Mouse_cursor::get_pos_x();
+			offset_screen[1] = AllegroCPP::Mouse_cursor::get_pos_y();
+		}
+		break;
+	case ALLEGRO_EVENT_MOUSE_BUTTON_UP:
+		holding_window = false;
+		break;
+	}
+}
+
+void App::window_drag_wrk::auto_think(AllegroCPP::Display& d) {
+	if (holding_window) {
+		const int to_move_x = AllegroCPP::Mouse_cursor::get_pos_x() - offset_screen[0];
+		const int to_move_y = AllegroCPP::Mouse_cursor::get_pos_y() - offset_screen[1];
+
+		int curr_x = 0, curr_y = 0;
+		d.get_position(curr_x, curr_y);
+
+		curr_x += to_move_x;
+		curr_y += to_move_y;
+		offset_screen[0] += to_move_x;
+		offset_screen[1] += to_move_y;
+
+		d.set_position(curr_x, curr_y);
+	}
+}
+
 
 //const ALLEGRO_COLOR FrontEnd::mask_body = al_map_rgb(255, 0, 255);
 //
@@ -968,3 +1013,4 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 //	}
 //	return {};
 //}
+
