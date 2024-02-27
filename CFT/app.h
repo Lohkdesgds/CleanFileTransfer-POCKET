@@ -46,7 +46,7 @@ class App {
 
 	bool m_ipaddr_locked = false; // related to m_ipaddr
 	bool m_is_host = true;
-	bool m_is_send_receive_enabled = true;
+	bool m_is_send_receive_enabled = false;
 	bool m_closed_flag = false;
 
 	void think_timed();

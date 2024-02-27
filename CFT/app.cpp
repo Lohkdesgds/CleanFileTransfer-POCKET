@@ -308,8 +308,9 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 		{ bc{ms::DEFAULT, 0, 800}, bc{ms::CUSTOM_1, 0, 838} },
 		{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1} },
 		{	{ms::CLICK_END, [&, _text_host_client_switch](auto& self) {
-				if (m_closed_flag) {
+				if (m_is_send_receive_enabled) {
 					self.set_custom_1_state(m_is_host);
+					hint_line_set("Send/receive enabled BLOCKED change of HOST/CLIENT. Please disconnect first!");
 					return;
 				}
 				m_is_host = self.get_custom_1_state();
@@ -319,17 +320,21 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 			}}
 		}
 	));
-	objs.push_back(new ClickableBitmap(
-		bmp->make_ref(), 555, 43, 32, 32,
-		{ bc{ms::DEFAULT, 134, 800}, bc{ms::CUSTOM_1, 134, 832} },
-		{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1} },
-		{	{ms::CLICK_END, [&](auto& self) {
-				m_is_send_receive_enabled = self.get_custom_1_state();
-				if (m_is_send_receive_enabled) hint_line_set("Enabled send/receive! Tasking asynchronously.");
-				else						   hint_line_set("Not receiving or sending new things anymore. Closing remaining connections, if any.");
-			}}
-		}
-	));
+	{
+		auto ptr = new ClickableBitmap(
+			bmp->make_ref(), 555, 43, 32, 32,
+			{ bc{ms::DEFAULT, 134, 800}, bc{ms::CUSTOM_1, 134, 832} },
+			{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1} },
+			{ {ms::CLICK_END, [&](auto& self) {
+					m_is_send_receive_enabled = self.get_custom_1_state();
+					if (m_is_send_receive_enabled) hint_line_set("Enabled send/receive! Tasking asynchronously.");
+					else						   hint_line_set("Not receiving or sending new things anymore. Closing remaining connections, if any.");
+				}}
+			}
+		);
+		ptr->set_custom_1_state(true);
+		objs.push_back(ptr);
+	}
 	/* ...variable overlays */
 
 
