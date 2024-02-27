@@ -12,7 +12,7 @@ class ClickableText : public ClickableObject<AllegroCPP::Font*> {
 	std::string m_buf_set;
 	//mutable double m_last_apply = 0.0;
 public:
-	ClickableText(const AllegroCPP::Font* font, int draw_x, int draw_y, int w, int h, c_state_action_map do_map, const std::string& text, c_state_triggered_functional_map fcn_map = {});
+	ClickableText(const AllegroCPP::Font* font, int draw_x, int draw_y, int w, int h, c_state_action_map do_map, const std::string& text, c_state_trig_fcn_map_auto fcn_map = {});
 
 	std::string& get_buf();
 	void apply_buf();

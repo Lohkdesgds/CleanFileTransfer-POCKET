@@ -307,10 +307,14 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 		bmp->make_ref(), 187, 40, 133, 38,
 		{ bc{ms::DEFAULT, 0, 800}, bc{ms::CUSTOM_1, 0, 838} },
 		{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1} },
-		{	{ms::CLICK_END, [&, _text_host_client_switch] {
-				if (m_closed_flag) return;
-				if (m_is_host = !m_is_host) { _text_host_client_switch->get_buf() = " HOST "; hint_line_set("Became host. Hosting from now on!");}
-				else					    { _text_host_client_switch->get_buf() = "CLIENT"; hint_line_set("Became client. Trying to connect asynchronously.");}
+		{	{ms::CLICK_END, [&, _text_host_client_switch](auto& self) {
+				if (m_closed_flag) {
+					self.set_custom_1_state(m_is_host);
+					return;
+				}
+				m_is_host = self.get_custom_1_state();
+				if (m_is_host) { _text_host_client_switch->get_buf() = " HOST "; hint_line_set("Became host. Hosting from now on!");}
+				else		   { _text_host_client_switch->get_buf() = "CLIENT"; hint_line_set("Became client. Trying to connect asynchronously.");}
 				_text_host_client_switch->apply_buf();
 			}}
 		}
@@ -319,9 +323,10 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 		bmp->make_ref(), 555, 43, 32, 32,
 		{ bc{ms::DEFAULT, 134, 800}, bc{ms::CUSTOM_1, 134, 832} },
 		{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1} },
-		{	{ms::CLICK_END, [&] {
-				if (m_is_send_receive_enabled = !m_is_send_receive_enabled) hint_line_set("Enabled send/receive! Tasking asynchronously.");
-				else														hint_line_set("Not receiving or sending new things anymore. Closing remaining connections, if any.");
+		{	{ms::CLICK_END, [&](auto& self) {
+				m_is_send_receive_enabled = self.get_custom_1_state();
+				if (m_is_send_receive_enabled) hint_line_set("Enabled send/receive! Tasking asynchronously.");
+				else						   hint_line_set("Not receiving or sending new things anymore. Closing remaining connections, if any.");
 			}}
 		}
 	));

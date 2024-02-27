@@ -18,11 +18,33 @@ inline void ClickableObject<Resource>::check_for_change_and_call_fcn(e_mouse_sta
 	if (new_state_to_save == m_last_mouse_state) return;
 	m_last_mouse_state = new_state_to_save;
 	const auto it = m_fcn_map.find(m_last_mouse_state);
-	if (it != m_fcn_map.end()) (it->second)();
+	if (it != m_fcn_map.end()) (it->second)(*this);
 }
 
 template<typename Resource>
-inline ClickableObject<Resource>::ClickableObject(int draw_x, int draw_y, int w, int h, std::vector<ClickableObject<Resource>::cuts> cuts, c_state_action_map do_map, c_state_triggered_functional_map fcn_map) :
+inline c_state_resource_map_citerator<Resource> ClickableObject<Resource>::find_default() const
+{
+	if (const auto it = m_sub_rsc.find(e_mouse_states_on_objects::CUSTOM_1); 
+		m_custom_1_bool_on && it != m_sub_rsc.end()) return it;
+	return m_sub_rsc.find(e_mouse_states_on_objects::DEFAULT);
+}
+
+template<typename Resource>
+inline const Resource& ClickableObject<Resource>::get_current_resource() const
+{
+	auto search = m_last_mouse_state;
+	if (search == e_mouse_states_on_objects::DEFAULT) {
+		if (m_custom_1_bool_on) 
+			search = e_mouse_states_on_objects::CUSTOM_1;
+	}
+
+	auto it = m_sub_rsc.find(search);
+	if (it == m_sub_rsc.end()) it = find_default();
+	return it->second;
+}
+
+template<typename Resource>
+inline ClickableObject<Resource>::ClickableObject(int draw_x, int draw_y, int w, int h, std::vector<ClickableObject<Resource>::cuts> cuts, c_state_action_map do_map, c_state_trig_fcn_map_auto fcn_map) :
 	//m_sub_bmp(body_src, x, y, w, h),
 	m_actions_map(do_map),
 	m_fcn_map(fcn_map),
@@ -60,14 +82,15 @@ inline e_actions_object ClickableObject<Resource>::check(const int(&mouse_pos)[2
 
 	switch (it->second) {
 	case e_actions_object::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1:
-	{
-		auto a = m_sub_rsc.find(e_mouse_states_on_objects::DEFAULT);
-		auto b = m_sub_rsc.find(e_mouse_states_on_objects::CUSTOM_1);
-
-		if (b == m_sub_rsc.end() || a == m_sub_rsc.end()) break;
-
-		std::swap(a->second, b->second);
-	}
+	//{
+	//	auto a = m_sub_rsc.find(e_mouse_states_on_objects::DEFAULT);
+	//	auto b = m_sub_rsc.find(e_mouse_states_on_objects::CUSTOM_1);
+	//
+	//	if (b == m_sub_rsc.end() || a == m_sub_rsc.end()) break;
+	//
+	//	std::swap(a->second, b->second);
+	//}
+		m_custom_1_bool_on = !m_custom_1_bool_on;
 		break;
 	default:
 		break;
@@ -122,7 +145,7 @@ inline bool ClickableObject<Resource>::has_action_in_it(e_actions_object act) co
 }
 
 template<typename Resource>
-inline void ClickableObject<Resource>::set_function_on_state_changing_to(e_mouse_states_on_objects mouse_state, std::function<void(void)> fcn)
+inline void ClickableObject<Resource>::set_function_on_state_changing_to(e_mouse_states_on_objects mouse_state, std::function<void(ClickableObject<Resource>&)> fcn)
 {
 	if (fcn) {
 		m_fcn_map[mouse_state] = fcn;
@@ -131,4 +154,16 @@ inline void ClickableObject<Resource>::set_function_on_state_changing_to(e_mouse
 		auto it = m_fcn_map.find(mouse_state);
 		if (it != m_fcn_map.end()) m_fcn_map.erase(it);
 	}
+}
+
+template<typename Resource>
+inline bool ClickableObject<Resource>::get_custom_1_state() const
+{
+	return m_custom_1_bool_on;
+}
+
+template<typename Resource>
+inline void ClickableObject<Resource>::set_custom_1_state(bool b)
+{
+	m_custom_1_bool_on = b;
 }

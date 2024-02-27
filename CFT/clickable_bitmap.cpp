@@ -13,7 +13,7 @@ static std::vector<ClickableObject<AllegroCPP::Bitmap*>::cuts> bitmap_cuts_to_te
 	return m;
 }
 
-ClickableBitmap::ClickableBitmap(const AllegroCPP::Bitmap& body_src, int draw_x, int draw_y, int w, int h, std::vector<bitmap_cuts> cuts, c_state_action_map do_map, c_state_triggered_functional_map fcn_map) :
+ClickableBitmap::ClickableBitmap(const AllegroCPP::Bitmap& body_src, int draw_x, int draw_y, int w, int h, std::vector<bitmap_cuts> cuts, c_state_action_map do_map, c_state_trig_fcn_map_auto fcn_map) :
 	ClickableObject<AllegroCPP::Bitmap*>(
 		draw_x,
 		draw_y,
@@ -36,7 +36,8 @@ ClickableBitmap::~ClickableBitmap()
 
 void ClickableBitmap::draw() const
 {
-	auto it = m_sub_rsc.find(m_last_mouse_state);
-	if (it == m_sub_rsc.end()) it = m_sub_rsc.find(e_mouse_states_on_objects::DEFAULT);
-	it->second->draw();
+	//auto it = m_sub_rsc.find(m_last_mouse_state);
+	//if (it == m_sub_rsc.end()) it = m_sub_rsc.find(e_mouse_states_on_objects::DEFAULT);
+	//it->second->draw();
+	(get_current_resource())->draw();
 }

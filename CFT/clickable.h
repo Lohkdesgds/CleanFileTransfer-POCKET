@@ -27,9 +27,12 @@ enum class e_mouse_states_on_objects {
 	CUSTOM_1
 };
 
+template<typename Resource> class ClickableObject;
+
 using c_state_action_map = std::unordered_map<e_mouse_states_on_objects, e_actions_object>;
 template<typename Resource> using c_state_resource_map = std::unordered_map<e_mouse_states_on_objects, Resource>;
-using c_state_triggered_functional_map = std::unordered_map<e_mouse_states_on_objects, std::function<void(void)>>;
+template<typename Resource> using c_state_resource_map_citerator = std::unordered_map<e_mouse_states_on_objects, Resource>::const_iterator;
+template<typename Resource> using c_state_triggered_functional_map = std::unordered_map<e_mouse_states_on_objects, std::function<void(ClickableObject<Resource>&)>>;
 
 class ClickableBase {
 public:
@@ -53,18 +56,25 @@ template<typename Resource>
 class ClickableObject : public ClickableBase {
 public:
 	struct cuts { e_mouse_states_on_objects on_state; Resource use_this; };
+
+	using c_state_trig_fcn_map_auto = c_state_triggered_functional_map<Resource>;
 protected:
 	c_state_resource_map<Resource> m_sub_rsc;
-	c_state_triggered_functional_map m_fcn_map;
+	c_state_trig_fcn_map_auto m_fcn_map;
 
 	const c_state_action_map m_actions_map; // const map for mapping actions to resources
 	const int m_click_zone[2][2]; // auto generate based on m_sub_rsc pos + subpart offset
 
 	e_mouse_states_on_objects m_last_mouse_state = e_mouse_states_on_objects::DEFAULT;
 
+	bool m_custom_1_bool_on = false;
+
 	virtual void check_for_change_and_call_fcn(e_mouse_states_on_objects new_state_to_save);
+
+	virtual c_state_resource_map_citerator<Resource> find_default() const;
+	virtual const Resource& get_current_resource() const;
 public:
-	ClickableObject(int draw_x, int draw_y, int w, int h, std::vector<cuts> cuts, c_state_action_map do_map, c_state_triggered_functional_map fcn_map = {});
+	ClickableObject(int draw_x, int draw_y, int w, int h, std::vector<cuts> cuts, c_state_action_map do_map, c_state_trig_fcn_map_auto fcn_map = {});
 
 	virtual e_actions_object check(const int(&mouse_pos)[2], e_mouse_states_on_objects mouse_state);
 
@@ -104,10 +114,23 @@ public:
 
 	/// <summary>
 	/// <para>Set a function to be triggered at mouse state change on this object to this state</para>
+	/// <para>The argument is the object itself</para>
 	/// </summary>
 	/// <param name="mouse_state">Changing to this state will trigger the function</param>
 	/// <param name="fcn">Function to be triggered (or set to {} to remove it)</param>
-	virtual void set_function_on_state_changing_to(e_mouse_states_on_objects mouse_state, std::function<void(void)> fcn = {});
+	virtual void set_function_on_state_changing_to(e_mouse_states_on_objects mouse_state, std::function<void(ClickableObject<Resource>&)> fcn = {});
+
+	/// <summary>
+	/// <para>If this is a CUSTOM_1 one, this will change value on the event you've set.</para>
+	/// </summary>
+	/// <returns>Current BOOL internally saved</returns>
+	virtual bool get_custom_1_state() const;
+
+	/// <summary>
+	/// <para>Force a value for CUSTOM_1 if needed</para>
+	/// </summary>
+	/// <param name="bool">True or false</param>
+	virtual void set_custom_1_state(bool);
 };
 
 #include "clickable.ipp"

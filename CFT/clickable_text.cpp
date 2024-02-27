@@ -12,7 +12,7 @@ static std::vector<ClickableObject<AllegroCPP::Font*>::cuts> font_to_template_cu
 	return m;
 }
 
-ClickableText::ClickableText(const AllegroCPP::Font* font, int draw_x, int draw_y, int w, int h, c_state_action_map do_map, const std::string& text, c_state_triggered_functional_map fcn_map) :
+ClickableText::ClickableText(const AllegroCPP::Font* font, int draw_x, int draw_y, int w, int h, c_state_action_map do_map, const std::string& text, c_state_trig_fcn_map_auto fcn_map) :
 	ClickableObject<AllegroCPP::Font*>(
 		draw_x,
 		draw_y,
