@@ -1,4 +1,3 @@
-#include "file_reader.h"
 #include "file_reference.h"
 #include "app.h"
 
@@ -6,13 +5,40 @@
 
 int main()
 {
-	App app;
+	std::atomic_int step_counter = 0;
 
-	AllegroCPP::Thread thr_async([&app] {
-		return app.think();
+	App* app = nullptr;
+	AllegroCPP::Thread thr_draw([&] {
+		if (!app) {
+			app = new App();
+			++step_counter;
+		}
+		return app->draw();
 	});
 
-	while (app.draw());
+	while (step_counter == 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+	AllegroCPP::Thread thr_async([&app] {
+		return app->think();
+	});
+
+	while (app->running()) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(4000));
+		const auto ptr = app->get_next_file_to_transfer();
+		if (ptr) {
+			ptr->set_status(File_reference::e_status::SENDING);
+			for (double d = 0.0; d <= 1.0; d += 0.01) {
+				ptr->set_progress(d);
+				std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			}
+			ptr->set_progress(1.0);
+			ptr->set_status(File_reference::e_status::ENDED_TRANSFER);
+
+			app->move_to_bottom_this_file(ptr);
+		}
+	}
+
+	delete app;
 
 	return 0;
 }

@@ -46,6 +46,10 @@ class ItemDisplay : public ClickableBase {
 
 	AllegroCPP::Bitmap* m_self_ref_for_sub; // inverse order, 27 * 4 pixels to right = e_buttons_mapping::DEL ... FAILED_ALERT on 0
 
+	ALLEGRO_COLOR 
+		m_progress_color_bg = al_map_rgb(84, 84, 84),
+		m_progress_color_fg = al_map_rgb(217, 217, 217);
+
 	ClickableText* m_item_name; // Like: #NUM: Path_name_scrollable_on_hover
 	ClickableBitmap
 		*m_overlay, // whole overlay png

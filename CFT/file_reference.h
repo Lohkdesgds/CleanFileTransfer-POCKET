@@ -9,7 +9,7 @@ private:
 	std::string m_file_path; // should not be changed hmm but cannot be const because vector needs copy
 
 	e_status m_status = e_status::READY_TO_SEND;
-	double m_progress = 0.0;
+	double m_progress = 0.0; // 0..1
 
 	// x will be always known (draw now is 574, width is 27. height is also known. this is top y)
 	int m_collision_position_now_for_delete_top_y = 0;

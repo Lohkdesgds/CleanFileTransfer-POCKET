@@ -15,6 +15,37 @@ void App::think_timed()
 	m_d_drag_auto.auto_think(m_disp);
 }
 
+void App::think_timed_slow()
+{
+	m_top_list_text->get_buf() = "To send / being downloaded (drag and drop!) [" + std::to_string(m_item_list.size()) + "]";
+	m_top_list_text->apply_buf();
+
+	for (auto& i : m_item_list) i->refresh_self();
+}
+
+bool App::running() const
+{
+	return !m_closed_flag;
+}
+
+std::shared_ptr<File_reference> App::get_next_file_to_transfer() const
+{
+	const auto it = std::find_if(m_item_list.begin(), m_item_list.end(), [](const ItemDisplay* const& ptr) { return ptr->get_file_ref()->get_status() == File_reference::e_status::READY_TO_SEND; });
+	if (it != m_item_list.end()) return (*it)->get_file_ref();
+	return {};
+}
+
+void App::move_to_bottom_this_file(const std::shared_ptr<File_reference>& file_ref)
+{
+	std::lock_guard<std::recursive_mutex> l(m_item_list_mtx);
+	auto it = std::find_if(m_item_list.begin(), m_item_list.end(), [&](const ItemDisplay* const& ptr) { return ptr->get_file_ref() == file_ref; });
+	if (it == m_item_list.end()) return;
+
+	auto* moving = *it;
+	m_item_list.erase(it);
+	m_item_list.push_back(moving);
+}
+
 void App::hint_line_set(const std::string& str)
 {
 	if (!m_top_text) return;
@@ -26,7 +57,11 @@ void App::push_item_to_list(const std::string& path)
 {
 	std::lock_guard<std::recursive_mutex> l(m_item_list_mtx);
 	for (const auto& i : m_item_list) { if (i->get_file_ref()->get_path() == path) return; }
-	m_item_list.push_back(new ItemDisplay{ path, *m_base_png, m_font20 });
+	
+	const auto it = std::find_if(m_item_list.rbegin(), m_item_list.rend(), [](const ItemDisplay* const& ptr) { const auto v = ptr->get_file_ref()->get_status(); return v != File_reference::e_status::ENDED_TRANSFER && v != File_reference::e_status::ERROR_TRANSFER; });
+
+	/*if (it != m_item_list.rbegin()) */m_item_list.insert(it.base(), new ItemDisplay{path, *m_base_png, m_font20});
+	/*else                            m_item_list.push_back(new ItemDisplay{path, *m_base_png, m_font20}); */
 }
 
 App::App() :
@@ -60,10 +95,12 @@ App::App() :
 	eq_think << AllegroCPP::Event_mouse();
 	eq_think << AllegroCPP::Event_keyboard();
 	eq_think << es_think_timed_stuff;
+	eq_think << es_think_timed_slow_stuff;
 
 	// starts
 	es_draw_timer.start();
 	es_think_timed_stuff.start();
+	es_think_timed_slow_stuff.start();
 
 	//push_item_to_list("the_test_of_path.txt");
 	for(int i = 0; i < 18; ++i) push_item_to_list("the_" + std::to_string(i) + "_test_of_path.txt");
@@ -176,7 +213,8 @@ bool App::think()
 		}
 		break;
 	case ALLEGRO_EVENT_TIMER:
-		think_timed();
+		if (evr.timer.source == es_think_timed_stuff) think_timed();
+		else										  think_timed_slow();
 		break;
 	case EVENT_DROP_CUSTOM_ID:
 		{
@@ -284,10 +322,10 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 		{ {ms::DEFAULT, ac::NONE} },
 		"IP:"
 	));
-	objs.push_back(new ClickableText(
+	objs.push_back(m_top_list_text = new ClickableText(
 		f24, 8, 139, -1, -1,
 		{ {ms::DEFAULT, ac::NONE} },
-		"Items to send / being downloaded (drag and drop!)"
+		"To send / being downloaded (drag and drop!) []"
 	));
 	/* ... static texts*/
 

@@ -3,6 +3,7 @@
 #include <AllegroCPP/include/Graphics.h>
 #include <AllegroCPP/include/System.h>
 
+#include "file_reader.h"
 #include "file_reference.h"
 #include "clickable_bitmap.h"
 #include "clickable_text.h"
@@ -27,7 +28,7 @@ class App {
 		eq_draw, // so it always be vsync or less
 		eq_think; // all tasks not related to draw
 
-	AllegroCPP::Timer es_draw_timer{ 1.0 }, es_think_timed_stuff{ 1.0 / 60 };
+	AllegroCPP::Timer es_draw_timer{ 1.0 }, es_think_timed_stuff{ 1.0 / 60 }, es_think_timed_slow_stuff{ 1.0 / 5 };
 	AllegroCPP::Event_drag_and_drop es_dnd;
 
 	const std::vector<ClickableBase*> m_objects;
@@ -39,6 +40,8 @@ class App {
 
 	// Debug info:
 	ClickableText* m_top_text;
+	// Show items in name
+	ClickableText* m_top_list_text;
 
 	// smooth listing
 	double m_smooth_scroll = 0.0; // follows m_smooth_scroll_target
@@ -50,6 +53,7 @@ class App {
 	bool m_closed_flag = false;
 
 	void think_timed();
+	void think_timed_slow();
 
 	void hint_line_set(const std::string&);
 	void push_item_to_list(const std::string&);
@@ -60,6 +64,10 @@ public:
 	bool draw();
 	bool think();
 
+	bool running() const;
+
+	std::shared_ptr<File_reference> get_next_file_to_transfer() const;
+	void move_to_bottom_this_file(const std::shared_ptr<File_reference>& file_ref);
 private:
 	std::vector<ClickableBase*> _generate_all_items_in_screen();
 
