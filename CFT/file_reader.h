@@ -60,6 +60,8 @@ class File_handler {
 
 	friend File_handler make_encrypter(AllegroCPP::File& output, AllegroCPP::File& reading);
 	friend File_handler make_decrypter(AllegroCPP::File& output, AllegroCPP::File& reading);
+	friend File_handler* make_new_encrypter(AllegroCPP::File& output, AllegroCPP::File& reading);
+	friend File_handler* make_new_decrypter(AllegroCPP::File& output, AllegroCPP::File& reading);
 
 	// assist fcn for file write
 	size_t c_write(void*, size_t);
@@ -93,6 +95,8 @@ public:
 
 File_handler make_encrypter(AllegroCPP::File& output, AllegroCPP::File& reading);
 File_handler make_decrypter(AllegroCPP::File& output, AllegroCPP::File& reading);
+File_handler* make_new_encrypter(AllegroCPP::File& output, AllegroCPP::File& reading);
+File_handler* make_new_decrypter(AllegroCPP::File& output, AllegroCPP::File& reading);
 
 #ifdef _DEBUG
 void file_reader_test();

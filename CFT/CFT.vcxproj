@@ -238,6 +238,7 @@
     <ClCompile Include="..\deps\AllegroCPP\src\vertex.cpp" />
     <ClCompile Include="..\deps\AllegroCPP\src\video.cpp" />
     <ClCompile Include="app_props.cpp" />
+    <ClCompile Include="app_threads_impl.cpp" />
     <ClCompile Include="clickable_bitmap.cpp" />
     <ClCompile Include="clickable_text.cpp" />
     <ClCompile Include="app.cpp" />

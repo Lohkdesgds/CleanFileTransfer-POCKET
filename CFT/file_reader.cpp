@@ -278,6 +278,16 @@ File_handler make_decrypter(AllegroCPP::File& output, AllegroCPP::File& reading)
 	return File_handler(File_handler::e_type::RECEIVER, output, reading);
 }
 
+File_handler* make_new_encrypter(AllegroCPP::File& output, AllegroCPP::File& reading)
+{
+	return new File_handler(File_handler::e_type::SENDER, output, reading);
+}
+
+File_handler* make_new_decrypter(AllegroCPP::File& output, AllegroCPP::File& reading)
+{
+	return new File_handler(File_handler::e_type::RECEIVER, output, reading);
+}
+
 #ifdef _DEBUG
 void file_reader_test()
 {

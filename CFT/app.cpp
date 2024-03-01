@@ -3,47 +3,54 @@
 #include <allegro5/allegro_primitives.h>
 
 
-void App::think_timed()
+App::b_socket_package_structure::b_socket_package_structure(App::b_socket_package_structure&& mov) 
+	: socket_package(mov.socket_package)
 {
-	if (static_cast<size_t>(m_smooth_scroll_target) + max_items_on_screen > m_item_list.size()) m_smooth_scroll_target = static_cast<double>(m_item_list.size() < max_items_on_screen ? 0 : m_item_list.size() - max_items_on_screen);
-	if (m_smooth_scroll_target < 0.0) m_smooth_scroll_target = 0.0;
-
-	m_smooth_scroll = (m_smooth_scroll * smoothness_scroll_y + m_smooth_scroll_target) / (1.0 + smoothness_scroll_y);
-
-	if (fabs(m_smooth_scroll - m_smooth_scroll_target) < 0.01) m_smooth_scroll = m_smooth_scroll_target;
-
-	m_d_drag_auto.auto_think(m_disp);
+	memcpy(data.raw, mov.data.raw, sizeof(data.raw));
 }
 
-void App::think_timed_slow()
+App::b_socket_package_structure& App::b_socket_package_structure::as_file_description_and_begin(const std::string& file_name)
 {
-	m_top_list_text->get_buf() = "To send / being downloaded (drag and drop!) [" + std::to_string(m_item_list.size()) + "]";
-	m_top_list_text->apply_buf();
-
-	for (auto& i : m_item_list) i->refresh_self();
+	socket_package = static_cast<decltype(socket_package)>(e_socket_package::FILE_DESCRIPTION_AND_BEGIN);
+	if (file_name.length() >= sizeof(data.raw)) throw std::invalid_argument("Path is too big(?)");
+	memcpy(data.raw, file_name.data(), file_name.size());
+	data.raw[file_name.size()] = '\0';
+	return *this;
 }
 
-bool App::running() const
+App::b_socket_package_structure& App::b_socket_package_structure::as_good()
 {
-	return !m_closed_flag;
+	socket_package = static_cast<decltype(socket_package)>(e_socket_package::HELLO_GOOD);
+	data.raw[0] = '\0';
+	return *this;
 }
 
-std::shared_ptr<File_reference> App::get_next_file_to_transfer() const
+App::b_socket_package_structure& App::b_socket_package_structure::as_closing()
 {
-	const auto it = std::find_if(m_item_list.begin(), m_item_list.end(), [](const ItemDisplay* const& ptr) { return ptr->get_file_ref()->get_status() == File_reference::e_status::READY_TO_SEND; });
-	if (it != m_item_list.end()) return (*it)->get_file_ref();
-	return {};
+	socket_package = static_cast<decltype(socket_package)>(e_socket_package::CLOSING_BYE);
+	data.raw[0] = '\0';
+	return *this;
 }
 
-void App::move_to_bottom_this_file(const std::shared_ptr<File_reference>& file_ref)
+App::b_socket_package_structure& App::b_socket_package_structure::as_ping()
 {
-	std::lock_guard<std::recursive_mutex> l(m_item_list_mtx);
-	auto it = std::find_if(m_item_list.begin(), m_item_list.end(), [&](const ItemDisplay* const& ptr) { return ptr->get_file_ref() == file_ref; });
-	if (it == m_item_list.end()) return;
+	socket_package = static_cast<decltype(socket_package)>(e_socket_package::PING);
+	data.raw[0] = '\0';
+	return *this;
+}
 
-	auto* moving = *it;
-	m_item_list.erase(it);
-	m_item_list.push_back(moving);
+App::b_socket_package_structure& App::b_socket_package_structure::as_file_completion()
+{
+	socket_package = static_cast<decltype(socket_package)>(e_socket_package::FILE_COMPLETION);
+	data.raw[0] = '\0';
+	return *this;
+}
+
+std::vector<uint8_t> App::b_socket_package_structure::gen() const
+{
+	std::vector<uint8_t> conv(sizeof(b_socket_package_structure), '\0');
+	memcpy(conv.data(), this, sizeof(b_socket_package_structure));
+	return conv;
 }
 
 void App::hint_line_set(const std::string& str)
@@ -64,6 +71,24 @@ void App::push_item_to_list(const std::string& path)
 	/*else                            m_item_list.push_back(new ItemDisplay{path, *m_base_png, m_font20}); */
 }
 
+std::shared_ptr<File_reference> App::get_next_file_to_transfer() const
+{
+	const auto it = std::find_if(m_item_list.begin(), m_item_list.end(), [](const ItemDisplay* const& ptr) { return ptr->get_file_ref()->get_status() == File_reference::e_status::READY_TO_SEND; });
+	if (it != m_item_list.end()) return (*it)->get_file_ref();
+	return {};
+}
+
+void App::move_to_bottom_this_file(const std::shared_ptr<File_reference>& file_ref)
+{
+	std::lock_guard<std::recursive_mutex> l(m_item_list_mtx);
+	auto it = std::find_if(m_item_list.begin(), m_item_list.end(), [&](const ItemDisplay* const& ptr) { return ptr->get_file_ref() == file_ref; });
+	if (it == m_item_list.end()) return;
+
+	auto* moving = *it;
+	m_item_list.erase(it);
+	m_item_list.push_back(moving);
+}
+
 App::App() :
 	m_disp(
 		display_size[0], display_size[1], "CleanFileTransfer Ultimate", ALLEGRO_NOFRAME,
@@ -78,7 +103,6 @@ App::App() :
 	m_font28(new AllegroCPP::Font(27, 28, m_font_resource.clone_for_read())),
 	es_dnd(m_disp, EVENT_DROP_CUSTOM_ID),
 	m_objects(_generate_all_items_in_screen())
-
 {
 	al_init_primitives_addon();
 
@@ -104,161 +128,72 @@ App::App() :
 
 	//push_item_to_list("the_test_of_path.txt");
 	for(int i = 0; i < 18; ++i) push_item_to_list("the_" + std::to_string(i) + "_test_of_path.txt");
+
+	m_think_thread = AllegroCPP::Thread([this] {return _think_thread(); });
+	m_socket_send_thread = AllegroCPP::Thread([this] {return _socket_send_thread(); });
+	m_socket_recv_thread = AllegroCPP::Thread([this] {return _socket_recv_thread(); });
+	while (_display_thread());
 }
 
 App::~App()
 {
+	std::unique_lock<std::shared_mutex> l(m_socket_mtx);
+	if (m_socket_if_host) delete m_socket_if_host;
+	if (m_socket) {
+		goodbye_socket();
+		delete m_socket;
+	}
+	if (m_socket_fp_recv) delete m_socket_fp_recv;
+	if (m_socket_fp_send) delete m_socket_fp_send;
+
 	for (auto& i : m_objects) delete i;
 	for (auto& i : m_item_list) delete i;
 }
 
-bool App::draw()
+bool App::running() const
 {
-	static AllegroCPP::Transform tf_def;
-
-	// default 1:1 transform
-	tf_def.use();
-
-	if (!eq_draw.wait_for_event().valid()) return !m_closed_flag;
-	if (eq_draw.has_event()) eq_draw.flush_event_queue();
-
-	m_disp.clear_to_color();
-	for (const auto& i : m_objects) i->draw();
-
-	AllegroCPP::Transform custom;
-	const size_t offp = static_cast<size_t>(m_smooth_scroll);
-
-	custom.translate(0, items_y_offset - m_smooth_scroll * height_of_items + offp * height_of_items);
-	custom.use();
-
-	{
-		std::lock_guard<std::recursive_mutex> l(m_item_list_mtx);
-		//for (const auto& i : m_item_list) {
-		for (size_t p = offp; p < 18 + offp + (m_smooth_scroll != m_smooth_scroll_target ? 1 : 0) && p < m_item_list.size(); ++p) {
-			auto& i = m_item_list[p];
-			i->draw(custom, { {0, 171}, {600, 800 - 171} });
-			custom.translate(0, height_of_items);
-			custom.use();
-		}
-	}
-
-	m_disp.flip();
-
 	return !m_closed_flag;
 }
 
-bool App::think()
+bool App::handshake_socket()
 {
-	auto ev = eq_think.wait_for_event(0.1f);
-	if (!ev.valid()) return !m_closed_flag;
+	if (!m_socket) return false;
 
-	const int _mouse_pos[2] = { ev.get().mouse.x, ev.get().mouse.y };
+	const std::vector<uint8_t> dat_raw = b_socket_package_structure().as_good().gen();
+	m_socket->write(dat_raw.data(), dat_raw.size());
 
-	std::vector<std::pair<decltype(m_item_list.begin()), e_actions_object>> m_actions_on_items;
-	std::vector<std::pair<decltype(m_objects.begin()), e_actions_object>> m_actions_on_const_list;
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-	const auto mouse_check_auto = [&](e_mouse_states_on_objects state_test){
-		for (auto i = m_objects.begin(); i != m_objects.end(); ++i) {
-			auto ac = (*i)->check(_mouse_pos, state_test);
-			if (ac != e_actions_object::NONE) m_actions_on_const_list.push_back({ i, ac });
-		}
+	b_socket_package_structure conf;
+	const size_t readd = m_socket->read(&conf, sizeof(b_socket_package_structure));
 
-		int _mouse_fixed[2] = { _mouse_pos[0], _mouse_pos[1] };
-
-		_mouse_fixed[1] -= items_y_offset - height_of_items * m_smooth_scroll;
-
-		std::lock_guard<std::recursive_mutex> l(m_item_list_mtx);
-
-		for (auto i = m_item_list.begin(); i != m_item_list.end(); ++i) {
-			auto ac = (*i)->check(_mouse_fixed, state_test);
-			if (ac != e_actions_object::NONE) m_actions_on_items.push_back({ i, ac });
-			_mouse_fixed[1] -= height_of_items;
-		}
-	};
-
-	const auto evr = ev.get();
-
-	// Test stuff
-	m_d_drag_auto.auto_event(evr);
-
-	switch (evr.type) {
-	case ALLEGRO_EVENT_MOUSE_AXES:
-		mouse_check_auto(e_mouse_states_on_objects::HOVER);
-		if (evr.mouse.dz != 0) {
-			m_smooth_scroll_target -= evr.mouse.dz;
-		}
-		break;
-	case ALLEGRO_EVENT_MOUSE_BUTTON_UP:
-		mouse_check_auto(e_mouse_states_on_objects::CLICK_END);
-		break;
-	case ALLEGRO_EVENT_MOUSE_BUTTON_DOWN:
-		mouse_check_auto(e_mouse_states_on_objects::CLICK);
-		break;
-	case ALLEGRO_EVENT_KEY_CHAR:
-		if (!m_selected_target_for_text) break;
-
-		switch (evr.keyboard.keycode) {
-		case ALLEGRO_KEY_ESCAPE: case ALLEGRO_KEY_ENTER: case ALLEGRO_KEY_PAD_ENTER:
-			m_selected_target_for_text = nullptr;
-			break;
-		case ALLEGRO_KEY_BACKSPACE:
-			if (m_selected_target_for_text->get_buf().length() > 0) m_selected_target_for_text->get_buf().pop_back();
-			m_selected_target_for_text->apply_buf();
-			break;
-		default:
-			if (evr.keyboard.unichar > 0 && (isalnum(evr.keyboard.unichar) || evr.keyboard.unichar == ':' || evr.keyboard.unichar == '.') && m_selected_target_for_text->get_buf().length() < max_any_text_len)
-				m_selected_target_for_text->get_buf() += evr.keyboard.unichar;
-			m_selected_target_for_text->apply_buf();
-			break;
-		}
-		break;
-	case ALLEGRO_EVENT_TIMER:
-		if (evr.timer.source == es_think_timed_stuff) think_timed();
-		else										  think_timed_slow();
-		break;
-	case EVENT_DROP_CUSTOM_ID:
-		{
-			AllegroCPP::Drop_event ednd(evr);
-			push_item_to_list(ednd.c_str());
-		}
-		break;
+	if (readd != sizeof(b_socket_package_structure) || conf.socket_package != static_cast<decltype(conf.socket_package)>(e_socket_package::HELLO_GOOD)) {
+		hint_line_set("Bad news. Confirmation failed. Trying again soon.");
+		std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+		delete m_socket;
+		m_socket = nullptr;
+		return false;
 	}
 
+	hint_line_set("CONNECTED!");
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	return true;
+}
 
-	// Work on stuff
-	for (const auto& i : m_actions_on_const_list) {
-		switch (i.second) {
-		case e_actions_object::DELETE_SELF:
-			throw std::runtime_error("Const list of items shouldn't be able to call for delete! Cannot do that!");
-			break;
-		case e_actions_object::CLOSE_APP:
-			m_closed_flag = true;
-			break;
-		case e_actions_object::UNSELECT_WRITE:
-			m_selected_target_for_text = nullptr;
-			break;
-		case e_actions_object::SELECT_FOR_WRITE:
-			if (!m_ipaddr_locked) m_selected_target_for_text = (ClickableText*)(*i.first);
-			break;
-		}
-	}
+void App::goodbye_socket()
+{
+	if (!m_socket) return;
 
-	for (const auto& i : m_actions_on_items) {
-		switch (i.second) {
-		case e_actions_object::DELETE_SELF:
-		{
-			std::lock_guard<std::recursive_mutex> l(m_item_list_mtx);
-			m_item_list.erase(i.first);
-		}
-			break;
-		case e_actions_object::CLOSE_APP:
-			m_closed_flag = true;
-			break;
-		}
-	}
+	const std::vector<uint8_t> dat_raw = b_socket_package_structure().as_closing().gen();
+	m_socket->write(dat_raw.data(), dat_raw.size());
+}
 
+void App::ping_socket()
+{
+	if (!m_socket) return;
 
-	return !m_closed_flag;
+	const std::vector<uint8_t> dat_raw = b_socket_package_structure().as_ping().gen();
+	m_socket->write(dat_raw.data(), dat_raw.size());
 }
 
 std::vector<ClickableBase*> App::_generate_all_items_in_screen()
@@ -330,13 +265,13 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 	/* ... static texts*/
 
 	/* variable texts */
-	objs.push_back(new ClickableText(
+	objs.push_back(m_ipaddr_src = new ClickableText(
 		f24, 64, 92, 528, 30, // 588, 92 if bigger than 529
 		{ 
 			{ms::DEFAULT, ac::NONE},
 			{ms::CLICK_END, ac::SELECT_FOR_WRITE} // select if click ends here
 		},
-		"localhost"
+		""
 	));
 	/* ...variable texts */
 
@@ -359,19 +294,19 @@ std::vector<ClickableBase*> App::_generate_all_items_in_screen()
 		}
 	));
 	{
-		auto ptr = new ClickableBitmap(
+		m_selector_sockets = new ClickableBitmap(
 			bmp->make_ref(), 555, 43, 32, 32,
 			{ bc{ms::DEFAULT, 134, 800}, bc{ms::CUSTOM_1, 134, 832} },
 			{ {ms::DEFAULT, ac::NONE}, {ms::CLICK_END, ac::BOOLEAN_TOGGLE_DEFAULT_WITH_CUSTOM_1} },
 			{ {ms::CLICK_END, [&](auto& self) {
-					m_is_send_receive_enabled = self.get_custom_1_state();
+					m_ipaddr_locked = m_is_send_receive_enabled = self.get_custom_1_state();
 					if (m_is_send_receive_enabled) hint_line_set("Enabled send/receive! Tasking asynchronously.");
 					else						   hint_line_set("Not receiving or sending new things anymore. Closing remaining connections, if any.");
 				}}
 			}
 		);
-		ptr->set_custom_1_state(true);
-		objs.push_back(ptr);
+		m_selector_sockets->set_custom_1_state(true);
+		objs.push_back(m_selector_sockets);
 	}
 	/* ...variable overlays */
 
@@ -1061,4 +996,3 @@ void App::window_drag_wrk::auto_think(AllegroCPP::Display& d) {
 //	}
 //	return {};
 //}
-

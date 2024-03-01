@@ -11,6 +11,36 @@
 #include "resource.h"
 
 class App {
+	enum class e_socket_package : uint8_t {
+		HELLO_GOOD = 1, /* if not closed by the other end, this comes */
+		CLOSING_BYE, /*On close, send this and die*/
+		FILE_DESCRIPTION_AND_BEGIN, /* send file name and be ready to receive data */
+		FILE_COMPLETION, /* Sending data terminated good */
+		PING /* just to keep alive */
+	};
+
+	struct b_socket_package_structure {
+		uint8_t socket_package = 0; // e_socket_package
+		union {
+			char raw[256];
+		} data;
+
+		b_socket_package_structure(const b_socket_package_structure&) = delete;
+		void operator=(const b_socket_package_structure&) = delete;
+		void operator=(b_socket_package_structure&&) = delete;
+
+		b_socket_package_structure(b_socket_package_structure&& mov);
+		b_socket_package_structure() = default;
+
+		b_socket_package_structure& as_good();
+		b_socket_package_structure& as_closing();
+		b_socket_package_structure& as_ping();
+		b_socket_package_structure& as_file_description_and_begin(const std::string& file_name);
+		b_socket_package_structure& as_file_completion();
+
+		std::vector<uint8_t> gen() const;
+	};
+
 	AllegroCPP::Display m_disp;
 
 	// Resources
@@ -31,9 +61,23 @@ class App {
 	AllegroCPP::Timer es_draw_timer{ 1.0 }, es_think_timed_stuff{ 1.0 / 60 }, es_think_timed_slow_stuff{ 1.0 / 5 };
 	AllegroCPP::Event_drag_and_drop es_dnd;
 
+	AllegroCPP::Thread 		
+		m_think_thread,
+		m_socket_send_thread,
+		m_socket_recv_thread;
+
 	const std::vector<ClickableBase*> m_objects;
 	std::vector<ItemDisplay*> m_item_list;
 	std::recursive_mutex m_item_list_mtx;
+
+	// Active or not sockets for host or client
+	AllegroCPP::File_host* m_socket_if_host = nullptr; // only if host
+	AllegroCPP::File_client* m_socket = nullptr; // may be host client or client itself
+	File_handler
+		*m_socket_fp_recv = nullptr,
+		*m_socket_fp_send = nullptr;
+
+	std::shared_mutex m_socket_mtx;
 
 	// target for text input
 	ClickableText* m_selected_target_for_text = nullptr;
@@ -42,6 +86,10 @@ class App {
 	ClickableText* m_top_text;
 	// Show items in name
 	ClickableText* m_top_list_text;
+	// IPaddr source:
+	ClickableText* m_ipaddr_src;
+	// Selector of send receive enabled:
+	ClickableBitmap* m_selector_sockets;
 
 	// smooth listing
 	double m_smooth_scroll = 0.0; // follows m_smooth_scroll_target
@@ -52,22 +100,30 @@ class App {
 	bool m_is_send_receive_enabled = false;
 	bool m_closed_flag = false;
 
+	bool _display_thread(); // this will be the main, lock on constructor, leave on close (X)
+	bool _think_thread();
+	bool _socket_send_thread();
+	bool _socket_recv_thread();
+
+	bool handshake_socket();
+	void goodbye_socket();
+	void ping_socket();
+
+
 	void think_timed();
 	void think_timed_slow();
 
 	void hint_line_set(const std::string&);
 	void push_item_to_list(const std::string&);
+
+	std::shared_ptr<File_reference> get_next_file_to_transfer() const;
+	void move_to_bottom_this_file(const std::shared_ptr<File_reference>& file_ref);
 public:
 	App();
 	~App();
 
-	bool draw();
-	bool think();
-
 	bool running() const;
 
-	std::shared_ptr<File_reference> get_next_file_to_transfer() const;
-	void move_to_bottom_this_file(const std::shared_ptr<File_reference>& file_ref);
 private:
 	std::vector<ClickableBase*> _generate_all_items_in_screen();
 

@@ -110,6 +110,9 @@
     <ClCompile Include="app_props.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="app_threads_impl.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

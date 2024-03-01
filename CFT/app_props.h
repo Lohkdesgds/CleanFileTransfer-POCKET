@@ -18,6 +18,7 @@ constexpr int items_y_offset = 171;
 constexpr int item_icon_ctl_height = 33;
 constexpr size_t max_any_text_len = 512;
 constexpr double smoothness_scroll_y = 7.0; // current = (target * this + current) / (this + 1)
+constexpr u_short app_port = 55365;
 
 constexpr int EVENT_DROP_CUSTOM_ID = 1024;
 
