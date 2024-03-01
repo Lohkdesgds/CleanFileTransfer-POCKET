@@ -127,7 +127,7 @@ App::App() :
 	es_think_timed_slow_stuff.start();
 
 	//push_item_to_list("the_test_of_path.txt");
-	for(int i = 0; i < 18; ++i) push_item_to_list("the_" + std::to_string(i) + "_test_of_path.txt");
+	//for(int i = 0; i < 18; ++i) push_item_to_list("the_" + std::to_string(i) + "_test_of_path.txt");
 
 	m_think_thread = AllegroCPP::Thread([this] {return _think_thread(); });
 	m_socket_send_thread = AllegroCPP::Thread([this] {return _socket_send_thread(); });
@@ -137,14 +137,14 @@ App::App() :
 
 App::~App()
 {
-	std::unique_lock<std::shared_mutex> l(m_socket_mtx);
-	if (m_socket_if_host) delete m_socket_if_host;
+	//std::unique_lock<std::shared_mutex> l(m_socket_mtx);
+	//if (m_socket_if_host) delete m_socket_if_host;
 	if (m_socket) {
 		goodbye_socket();
-		delete m_socket;
+		//delete m_socket;
 	}
-	if (m_socket_fp_recv) delete m_socket_fp_recv;
-	if (m_socket_fp_send) delete m_socket_fp_send;
+	//if (m_socket_fp_recv) delete m_socket_fp_recv;
+	//if (m_socket_fp_send) delete m_socket_fp_send;
 
 	for (auto& i : m_objects) delete i;
 	for (auto& i : m_item_list) delete i;
@@ -170,8 +170,8 @@ bool App::handshake_socket()
 	if (readd != sizeof(b_socket_package_structure) || conf.socket_package != static_cast<decltype(conf.socket_package)>(e_socket_package::HELLO_GOOD)) {
 		hint_line_set("Bad news. Confirmation failed. Trying again soon.");
 		std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-		delete m_socket;
-		m_socket = nullptr;
+		//delete m_socket;
+		m_socket.reset();// = nullptr;
 		return false;
 	}
 
@@ -180,20 +180,28 @@ bool App::handshake_socket()
 	return true;
 }
 
-void App::goodbye_socket()
+bool App::goodbye_socket()
 {
-	if (!m_socket) return;
+	if (!m_socket) return false;
 
 	const std::vector<uint8_t> dat_raw = b_socket_package_structure().as_closing().gen();
-	m_socket->write(dat_raw.data(), dat_raw.size());
+	return m_socket->write(dat_raw.data(), dat_raw.size()) == dat_raw.size();
 }
 
-void App::ping_socket()
+bool App::ping_socket()
 {
-	if (!m_socket) return;
+	if (!m_socket) return false;
 
 	const std::vector<uint8_t> dat_raw = b_socket_package_structure().as_ping().gen();
-	m_socket->write(dat_raw.data(), dat_raw.size());
+	return m_socket->write(dat_raw.data(), dat_raw.size()) == dat_raw.size();
+}
+
+bool App::send_file_incoming(const std::string& filename)
+{
+	if (!m_socket) return false;
+
+	const std::vector<uint8_t> dat_raw = b_socket_package_structure().as_file_description_and_begin(filename).gen();
+	return m_socket->write(dat_raw.data(), dat_raw.size()) == dat_raw.size();
 }
 
 std::vector<ClickableBase*> App::_generate_all_items_in_screen()

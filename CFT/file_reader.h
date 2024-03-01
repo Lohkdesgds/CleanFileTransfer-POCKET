@@ -47,7 +47,7 @@ class File_handler {
 	AllegroCPP::Text_log* m_ref_log = nullptr;
 	const e_type m_type;
 	e_log_mode m_log_mode = e_log_mode::RESUMED_PERCENTAGE;
-	bool m_started = false, m_finished = false, m_is_overloaded = false;
+	bool m_started = false, m_finished = false, m_is_overloaded = false, m_abort = false;
 
 
 	// m_pool.post call this
@@ -82,6 +82,8 @@ public:
 
 	void start();
 	void start_async();
+
+	void abort();
 
 	void link_logger(AllegroCPP::Text_log&, const e_log_mode = e_log_mode::RESUMED_PERCENTAGE);
 

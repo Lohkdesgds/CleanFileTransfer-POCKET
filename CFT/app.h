@@ -23,7 +23,7 @@ class App {
 		uint8_t socket_package = 0; // e_socket_package
 		union {
 			char raw[256];
-		} data;
+		} data{};
 
 		b_socket_package_structure(const b_socket_package_structure&) = delete;
 		void operator=(const b_socket_package_structure&) = delete;
@@ -71,11 +71,11 @@ class App {
 	std::recursive_mutex m_item_list_mtx;
 
 	// Active or not sockets for host or client
-	AllegroCPP::File_host* m_socket_if_host = nullptr; // only if host
-	AllegroCPP::File_client* m_socket = nullptr; // may be host client or client itself
-	File_handler
-		*m_socket_fp_recv = nullptr,
-		*m_socket_fp_send = nullptr;
+	std::unique_ptr<AllegroCPP::File_host> m_socket_if_host; // only if host
+	std::unique_ptr<AllegroCPP::File_client> m_socket; // may be host client or client itself
+	std::unique_ptr<File_handler>
+		m_socket_fp_recv,
+		m_socket_fp_send;
 
 	std::shared_mutex m_socket_mtx;
 
@@ -106,9 +106,9 @@ class App {
 	bool _socket_recv_thread();
 
 	bool handshake_socket();
-	void goodbye_socket();
-	void ping_socket();
-
+	bool goodbye_socket();
+	bool ping_socket();
+	bool send_file_incoming(const std::string& filename);
 
 	void think_timed();
 	void think_timed_slow();

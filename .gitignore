@@ -348,3 +348,4 @@ CFT/small_file_written.txt
 CFT/video.mov
 CFT/restored_video.mov
 CFT/encrypted_video.enc
+*.HEIC

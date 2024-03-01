@@ -13,7 +13,10 @@ void File_handler::_async_enc(async_enc dat)
 		// do heavy transform work (encrypt)
 		m_crypto.transform(dat.data);
 		// wait for its turn
-		while (dat.seq != m_seq_counter_sync) std::this_thread::yield();
+		while (dat.seq != m_seq_counter_sync) {
+			std::this_thread::yield();
+			if (m_abort) return;
+		}
 
 		if (m_log_mode == e_log_mode::DETAILED) LOG_AUTO("SENDER|POOL: Sending " << dat.seq << "!");
 
@@ -30,7 +33,10 @@ void File_handler::_async_enc(async_enc dat)
 		// decrypt
 		m_crypto.transform(dat.data);
 		// wait for its turn
-		while (dat.seq != m_seq_counter_sync) std::this_thread::yield();
+		while (dat.seq != m_seq_counter_sync) {
+			std::this_thread::yield();
+			if (m_abort) return;
+		}
 
 		if (m_log_mode == e_log_mode::DETAILED)LOG_AUTO("RECEIVER|POOL: Saving " << dat.seq << "!");
 
@@ -69,6 +75,8 @@ void File_handler::_sync_recv()
 
 	for (uint64_t remaining = m_expected_total; remaining > 0;)
 	{
+		if (m_abort) return;
+
 		uint64_t packet_len = 0;
 		c_read(packet_len); // #4
 
@@ -133,6 +141,8 @@ void File_handler::_sync_send()
 
 	for (uint64_t rem_bytes = total_bytes; rem_bytes > 0;)
 	{
+		if (m_abort) return;
+
 		const auto current_block_size = read_block_size < rem_bytes ? read_block_size : rem_bytes;
 		std::vector<uint8_t> buf(current_block_size, '\0');
 		
@@ -200,6 +210,7 @@ void File_handler::load_balancer(const uint64_t seq_now)
 	if (seq_now - m_seq_counter_sync > max_buffer_delay) {
 		while (m_is_overloaded = (seq_now > (m_seq_counter_sync + static_cast<uint64_t>(max_buffer_delay * 0.8)))) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			if (m_abort) return;
 		}
 	}
 }
@@ -209,6 +220,7 @@ void File_handler::wait_end()
 	while (!has_ended()) {
 		std::this_thread::yield();
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		if (m_abort) return;
 	}
 }
 
@@ -250,6 +262,13 @@ void File_handler::start_async()
 		m_async = AllegroCPP::Thread([this] { _sync_recv(); return false; });
 		break;
 	}	
+}
+
+void File_handler::abort()
+{
+	m_abort = true;
+	m_async.stop();
+	m_async.join();
 }
 
 void File_handler::link_logger(AllegroCPP::Text_log& l, const e_log_mode lm)

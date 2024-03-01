@@ -171,28 +171,92 @@ bool App::_think_thread()
 
 bool App::_socket_send_thread()
 {
+	if (m_closed_flag) return false;
+
 	std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	if (!m_is_send_receive_enabled) {
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
-		std::unique_lock<std::shared_mutex> l(m_socket_mtx);
+		std::unique_lock<std::shared_mutex> l(m_socket_mtx, std::defer_lock);
+		if (!l.try_lock()) return !m_closed_flag;
 		goodbye_socket(); // please disconnect!
 		return !m_closed_flag;
 	}
 
-	std::shared_lock<std::shared_mutex> l_read(m_socket_mtx);
+	std::shared_lock<std::shared_mutex> l_read(m_socket_mtx, std::defer_lock);
+	if (!l_read.try_lock()) return !m_closed_flag;
+
 	if (!m_socket) return !m_closed_flag;
 
-	ping_socket();
-	std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-	//auto ptr = get_next_file_to_transfer();
+	auto ptr = get_next_file_to_transfer();
 
+	if (!ptr) {
+		if (!ping_socket()) {
+			hint_line_set("Ping failed? Cancelling...");
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			m_is_send_receive_enabled = false;
+		}
+		else
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+		return !m_closed_flag;
+	}
+
+	AllegroCPP::File fpr(ptr->get_resumed_name(), "rb");
+
+	if (!fpr) {
+		ptr->set_status(File_reference::e_status::ERROR_TRANSFER);
+		return !m_closed_flag;
+	}
+
+	if (!send_file_incoming(ptr->get_resumed_name())) {
+		ptr->set_status(File_reference::e_status::ERROR_TRANSFER);
+		hint_line_set("FAILED TO SEND NAME, disconnected!");
+		std::this_thread::sleep_for(std::chrono::milliseconds(500));
+		m_is_send_receive_enabled = false;
+		return !m_closed_flag;
+	}
+
+	m_socket_fp_send = std::unique_ptr<File_handler>(make_new_encrypter(*m_socket, fpr));
+	ptr->set_status(File_reference::e_status::SENDING);
+	ptr->set_progress(0.0);
+	m_socket_fp_send->start_async();
+
+	while (!m_socket_fp_send->has_ended()) {
+		ptr->set_progress(m_socket_fp_send->get_progress() * 0.01);
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		if (!m_socket->valid()) {
+			hint_line_set("FAILED IN THE MIDDLE OH NO");
+			m_socket->close();
+			ptr->set_status(File_reference::e_status::ERROR_TRANSFER);
+			m_socket_fp_send->abort();
+			m_socket_fp_send.reset();
+			//m_socket_fp_send = nullptr;
+			return !m_closed_flag;
+		}
+
+		if (m_closed_flag) {
+			m_socket_fp_send->abort();
+			m_socket->close();
+			ptr->set_status(File_reference::e_status::ERROR_TRANSFER);
+			
+			//hint_line_set("Can't close while sending a file. Please wait next time!");
+			//AllegroCPP::message_box("Error", "Transfer failed, cannot close while in the middle of transfer", "App will abort completely.");
+			//std::terminate();
+		}
+	}
+
+	m_socket_fp_send.reset();
+
+	ptr->set_status(File_reference::e_status::ENDED_TRANSFER);
+	ptr->set_progress(1.0);
 
 	return !m_closed_flag;
 }
 
 bool App::_socket_recv_thread()
 {
+	if (m_closed_flag) return false;
+
 	std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
 	// keep up to date
@@ -200,18 +264,17 @@ bool App::_socket_recv_thread()
 
 	if (!m_is_send_receive_enabled) {
 		{
-			std::unique_lock<std::shared_mutex> l(m_socket_mtx);
+			std::unique_lock<std::shared_mutex> l(m_socket_mtx, std::defer_lock);
+			if (!l.try_lock()) return !m_closed_flag;
 
 			// it will check internally if there's a connection
 			goodbye_socket();
 
-			if (m_socket_if_host) delete m_socket_if_host;
+			m_socket_if_host.reset();
 			if (m_socket) {
 				hint_line_set("Other side disconnected, bye!");
-				delete m_socket;
+				m_socket.reset();
 			}
-			m_socket_if_host = nullptr;
-			m_socket = nullptr;
 		}
 
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -219,8 +282,10 @@ bool App::_socket_recv_thread()
 	}
 
 	if ((!m_socket || !m_socket->valid()) && m_is_host && !m_socket_if_host) { // if it is host and there's no host yet, create it
-		std::unique_lock<std::shared_mutex> l(m_socket_mtx);
-		m_socket_if_host = new AllegroCPP::File_host(app_port);
+		std::unique_lock<std::shared_mutex> l(m_socket_mtx, std::defer_lock);
+		if (!l.try_lock()) return !m_closed_flag;
+
+		m_socket_if_host = std::make_unique<AllegroCPP::File_host>(app_port);
 
 		hint_line_set("Created host, waiting connection!");
 		std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -233,23 +298,23 @@ bool App::_socket_recv_thread()
 		hint_line_set("Checking to connect...");
 		std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
-		std::unique_lock<std::shared_mutex> l(m_socket_mtx);
-		if (m_socket) delete m_socket;
+		std::unique_lock<std::shared_mutex> l(m_socket_mtx, std::defer_lock);
+		if (!l.try_lock()) return !m_closed_flag;
+
+		m_socket.reset();
 
 		if (m_is_host) { // because of before check, m_socket_if_host must not be null here
-			m_socket = new AllegroCPP::File_client(m_socket_if_host->listen(100));
+			m_socket = std::make_unique<AllegroCPP::File_client>(m_socket_if_host->listen(100));
 			if (m_socket->valid()) {
 				const auto& expected_src_ip = m_ipaddr_src->get_buf();
 				if (expected_src_ip.length() == 0 || (m_socket->valid() && m_socket->get_filepath() == expected_src_ip)) {
-					delete m_socket_if_host;
-					m_socket_if_host = nullptr;
+					m_socket_if_host.reset();
 
 					hint_line_set("As host, all good! Handshake...");
 					std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
 					if (!handshake_socket()) {
-						delete m_socket;
-						m_socket = nullptr;
+						m_socket.reset();
 					}
 					// good!
 				}
@@ -258,27 +323,24 @@ bool App::_socket_recv_thread()
 					else													    hint_line_set("Still waiting...");
 					std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
-					delete m_socket;
-					m_socket = nullptr;
+					m_socket.reset();
 				}
 			}
 		}
 		else { // if not host and not connected, try to connect.
-			m_socket = new AllegroCPP::File_client(m_ipaddr_src->get_buf(), app_port);
+			m_socket = std::make_unique<AllegroCPP::File_client>(m_ipaddr_src->get_buf(), app_port);
 			if (!m_socket->valid()) {
 				hint_line_set("Failed to connect. Trying again soon.");
 				std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-				delete m_socket;
-				m_socket = nullptr;
+				m_socket.reset();
 			}
 			else { // seems good!
 				hint_line_set("Connection seems good, sending HELLO...");
 				std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
 				if (!handshake_socket()) {
-					delete m_socket;
-					m_socket = nullptr;
+					m_socket.reset();
 				}
 			}
 		}
@@ -291,10 +353,10 @@ bool App::_socket_recv_thread()
 	if (m_socket->read(&dat, sizeof(dat)) != sizeof(b_socket_package_structure)) {
 		hint_line_set("FATAL ERROR ON SOCKET! DEAD!");
 		l_shared.release();
-		std::unique_lock<std::shared_mutex> l(m_socket_mtx);
+		std::unique_lock<std::shared_mutex> l(m_socket_mtx, std::defer_lock);
+		if (!l.try_lock()) return !m_closed_flag;
 		goodbye_socket();
-		delete m_socket;
-		m_socket = nullptr;
+		m_socket.reset();
 		return !m_closed_flag;
 	}
 
@@ -307,6 +369,49 @@ bool App::_socket_recv_thread()
 		break;
 	case e_socket_package::PING:
 		hint_line_set("Connection is online!");
+		break;
+	case e_socket_package::FILE_DESCRIPTION_AND_BEGIN:
+	{
+		hint_line_set("Receiving file " + std::string(dat.data.raw));
+		AllegroCPP::File fpw("received_" + std::string(dat.data.raw), "wb");
+
+		ItemDisplay* receiving = new ItemDisplay("received_" + std::string(dat.data.raw), *m_base_png, m_font20);
+		const auto ptr = receiving->get_file_ref();
+
+		ptr->set_status(File_reference::e_status::RECEIVING);
+		ptr->set_progress(0.0);
+
+		m_item_list.push_back(receiving);
+
+		m_socket_fp_recv = std::unique_ptr<File_handler>(make_new_decrypter(fpw, *m_socket));
+		m_socket_fp_recv->start_async();
+
+		while (!m_socket_fp_recv->has_ended()) {
+			if (!m_socket->valid()) {
+				hint_line_set("FAILED IN THE MIDDLE OH NO");
+				m_socket->close();
+				ptr->set_status(File_reference::e_status::ERROR_TRANSFER);
+				m_socket_fp_recv->abort();
+				m_socket_fp_send.reset();
+				return !m_closed_flag;
+			}
+
+			if (m_closed_flag) {
+				m_socket_fp_recv->abort();
+				m_socket->close();
+				ptr->set_status(File_reference::e_status::ERROR_TRANSFER);
+
+				//hint_line_set("Can't close while sending a file. Please wait next time!");
+				//AllegroCPP::message_box("Error", "Transfer failed, cannot close while in the middle of transfer", "App will abort completely.");
+				//std::terminate();
+			}
+		}
+
+		m_socket_fp_recv.reset();
+
+		ptr->set_status(File_reference::e_status::ENDED_TRANSFER);
+		ptr->set_progress(1.0);
+	}
 		break;
 	}
 
