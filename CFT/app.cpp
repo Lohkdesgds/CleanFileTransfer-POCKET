@@ -137,6 +137,10 @@ App::App() :
 
 App::~App()
 {
+	m_closed_flag = true;
+	m_think_thread.join();
+	m_socket_send_thread.join();
+	m_socket_recv_thread.join();
 	//std::unique_lock<std::shared_mutex> l(m_socket_mtx);
 	//if (m_socket_if_host) delete m_socket_if_host;
 	if (m_socket) {

@@ -26,12 +26,14 @@ How packets are made:
 /// Syncronous read-encrypt-send/recv-decrypt-store class for data transfering
 /// </summary>
 class File_handler {
+public:
+	enum class e_log_mode{DETAILED, RESUMED_PERCENTAGE};
+private:
 	static constexpr int64_t read_block_size = 2048;
 	static constexpr uint64_t max_buffer_delay = 8192;
 	static constexpr double max_buffer_delay_wait_factor = 0.8; // wait get down to this proportion of max_buffer_delay
 
 	enum class e_type{SENDER, RECEIVER};
-	enum class e_log_mode{DETAILED, RESUMED_PERCENTAGE};
 
 	struct async_enc {
 		std::vector<uint8_t> data;
@@ -43,6 +45,7 @@ class File_handler {
 	Lunaris::event_pool_async<async_enc> m_pool;
 	AllegroCPP::Thread m_async; // optional
 	std::atomic<uint64_t> m_seq_counter_sync = 0; // on async encrypt, do sequential write on File&
+	std::vector<std::exception_ptr> m_exceptions;
 	uint64_t m_expected_total = 0;
 	AllegroCPP::Text_log* m_ref_log = nullptr;
 	const e_type m_type;
@@ -90,6 +93,8 @@ public:
 	// [0..100]
 	float get_progress() const;
 
+	bool has_exceptions() const;
+	void rethrow_next_exception();
 
 	bool has_ended() const;
 };

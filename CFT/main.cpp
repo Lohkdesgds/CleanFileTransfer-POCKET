@@ -6,6 +6,8 @@
 int main()
 {
 	App app;
+
+	//file_reader_test();
 	return 0;
 }
 
