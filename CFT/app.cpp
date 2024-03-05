@@ -200,23 +200,27 @@ bool App::ping_socket()
 
 void App::sockets_cleanup()
 {
+	std::unique_lock<std::shared_mutex> forced(m_socket_mtx);
 	m_is_send_receive_enabled = false;
+	goodbye_socket();
 	m_socket.reset();
 	m_socket_if_host.reset();
 	if (m_socket_fp_recv) m_socket_fp_recv->abort();
 	if (m_socket_fp_send) m_socket_fp_send->abort();
-	m_socket_fp_recv.reset();
-	m_socket_fp_send.reset();
+	m_ipaddr_locked = false;
 }
 
 void App::handle_socket_threads_make_them_on(bool on)
 {
 	if (on) {
 		if (!m_threads_socket_on) {
+			std::unique_lock<std::shared_mutex> guaranteed(m_socket_mtx);
+
 			m_socket_send_thread = AllegroCPP::Thread([this] {return _socket_send_thread(); });
 			m_socket_recv_thread = AllegroCPP::Thread([this] {return _socket_recv_thread(); });
+
 			m_threads_socket_on = true;
-			hint_line_set("ENABLED Socket threads!");
+			hint_line_set("Sockets are now enabled for connections.");
 		}
 	}
 	else {
@@ -225,12 +229,14 @@ void App::handle_socket_threads_make_them_on(bool on)
 			m_socket_send_thread.stop();
 			m_socket_recv_thread.stop();
 
-			std::this_thread::sleep_for(std::chrono::milliseconds(500));
+			std::unique_lock<std::shared_mutex> guaranteed(m_socket_mtx);
 			//
 			//m_socket_send_thread.join();
 			//m_socket_recv_thread.join();
 			m_threads_socket_on = false;
-			hint_line_set("DISABLED Socket threads!");
+
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			hint_line_set("Socket disconnected.");
 		}
 	}
 }
