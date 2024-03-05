@@ -338,3 +338,14 @@ ASALocalRun/
 
 # BeatPulse healthcheck temp database
 healthchecksdb
+
+CFT/file_test.txt
+CFT/file_translated.txt
+CFT/file_written.txt
+CFT/small_file_test.txt
+CFT/small_file_translated.txt
+CFT/small_file_written.txt
+CFT/video.mov
+CFT/restored_video.mov
+CFT/encrypted_video.enc
+*.HEIC

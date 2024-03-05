@@ -1,6 +1,9 @@
-[submodule "Lunaris/Socket"]
-	path = Lunaris/Socket
-	url = https://github.com/Lohkdesgds/Lunaris-Socket
-[submodule "Lunaris/Console"]
-	path = Lunaris/Console
-	url = https://github.com/Lohkdesgds/Lunaris-Console
+[submodule "deps/AllegroCPP"]
+	path = deps/AllegroCPP
+	url = https://www.github.com/Lohkdesgds/AllegroCPP
+[submodule "deps/Lunaris/Encryption"]
+	path = deps/Lunaris/Encryption
+	url = https://github.com/Lohkdesgds/Lunaris-Encryption
+[submodule "deps/Lunaris/EventPool"]
+	path = deps/Lunaris/EventPool
+	url = https://github.com/LunarisLib/Lunaris-Event-Pool
