@@ -97,14 +97,18 @@ class App {
 
 	bool m_ipaddr_locked = false; // related to m_ipaddr
 	bool m_is_host = true;
-	bool m_is_send_receive_enabled = false;
-	bool m_closed_flag = false;
+	bool m_is_send_receive_enabled = false; // user selectable bool, cancelable if error / disconnect
+	bool m_threads_socket_on = false; // for handle_socket_threads_make_them_on
+	bool m_closed_flag = false; // full app kill
 
 	bool _display_thread(); // this will be the main, lock on constructor, leave on close (X)
 	bool _think_thread();
 	bool _socket_send_thread();
 	bool _socket_recv_thread();
 
+	void handle_socket_threads_make_them_on(bool);
+
+	void sockets_cleanup();
 	bool handshake_socket();
 	bool goodbye_socket();
 	bool ping_socket();

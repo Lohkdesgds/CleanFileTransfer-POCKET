@@ -21,6 +21,8 @@ void App::think_timed_slow()
 	m_top_list_text->apply_buf();
 
 	for (auto& i : m_item_list) i->refresh_self();
+
+	handle_socket_threads_make_them_on(m_is_send_receive_enabled);
 }
 
 bool App::_display_thread()
@@ -174,6 +176,7 @@ bool App::_socket_send_thread()
 	if (m_closed_flag) return false;
 
 	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
 	if (!m_is_send_receive_enabled) {
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 		std::unique_lock<std::shared_mutex> l(m_socket_mtx, std::defer_lock);
@@ -181,6 +184,8 @@ bool App::_socket_send_thread()
 		goodbye_socket(); // please disconnect!
 		return !m_closed_flag;
 	}
+
+	if (!m_socket) return !m_closed_flag;
 
 	std::shared_lock<std::shared_mutex> l_read(m_socket_mtx, std::defer_lock);
 	if (!l_read.try_lock()) return !m_closed_flag;
@@ -226,17 +231,13 @@ bool App::_socket_send_thread()
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 		if (!m_socket->valid()) {
 			hint_line_set("FAILED IN THE MIDDLE OH NO");
-			m_socket->close();
+			sockets_cleanup();
 			ptr->set_status(File_reference::e_status::ERROR_TRANSFER);
-			m_socket_fp_send->abort();
-			m_socket_fp_send.reset();
-			//m_socket_fp_send = nullptr;
 			return !m_closed_flag;
 		}
 
 		if (m_closed_flag) {
-			m_socket_fp_send->abort();
-			m_socket->close();
+			sockets_cleanup();
 			ptr->set_status(File_reference::e_status::ERROR_TRANSFER);
 			
 			//hint_line_set("Can't close while sending a file. Please wait next time!");
@@ -272,8 +273,8 @@ bool App::_socket_recv_thread()
 
 			m_socket_if_host.reset();
 			if (m_socket) {
-				hint_line_set("Other side disconnected, bye!");
-				m_socket.reset();
+				hint_line_set("Other side disconnected, reset!");
+				sockets_cleanup();
 			}
 		}
 
@@ -355,8 +356,7 @@ bool App::_socket_recv_thread()
 		l_shared.release();
 		std::unique_lock<std::shared_mutex> l(m_socket_mtx, std::defer_lock);
 		if (!l.try_lock()) return !m_closed_flag;
-		goodbye_socket();
-		m_socket.reset();
+		sockets_cleanup();
 		return !m_closed_flag;
 	}
 
@@ -387,18 +387,17 @@ bool App::_socket_recv_thread()
 		m_socket_fp_recv->start_async();
 
 		while (!m_socket_fp_recv->has_ended()) {
+			ptr->set_progress(m_socket_fp_recv->get_progress() * 0.01);
+
 			if (!m_socket->valid()) {
 				hint_line_set("FAILED IN THE MIDDLE OH NO");
-				m_socket->close();
+				sockets_cleanup();
 				ptr->set_status(File_reference::e_status::ERROR_TRANSFER);
-				m_socket_fp_recv->abort();
-				m_socket_fp_send.reset();
 				return !m_closed_flag;
 			}
 
 			if (m_closed_flag) {
-				m_socket_fp_recv->abort();
-				m_socket->close();
+				sockets_cleanup();
 				ptr->set_status(File_reference::e_status::ERROR_TRANSFER);
 
 				//hint_line_set("Can't close while sending a file. Please wait next time!");

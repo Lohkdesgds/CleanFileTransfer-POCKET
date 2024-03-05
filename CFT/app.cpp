@@ -130,8 +130,6 @@ App::App() :
 	//for(int i = 0; i < 18; ++i) push_item_to_list("the_" + std::to_string(i) + "_test_of_path.txt");
 
 	m_think_thread = AllegroCPP::Thread([this] {return _think_thread(); });
-	m_socket_send_thread = AllegroCPP::Thread([this] {return _socket_send_thread(); });
-	m_socket_recv_thread = AllegroCPP::Thread([this] {return _socket_recv_thread(); });
 	while (_display_thread());
 }
 
@@ -198,6 +196,43 @@ bool App::ping_socket()
 
 	const std::vector<uint8_t> dat_raw = b_socket_package_structure().as_ping().gen();
 	return m_socket->write(dat_raw.data(), dat_raw.size()) == dat_raw.size();
+}
+
+void App::sockets_cleanup()
+{
+	m_is_send_receive_enabled = false;
+	m_socket.reset();
+	m_socket_if_host.reset();
+	if (m_socket_fp_recv) m_socket_fp_recv->abort();
+	if (m_socket_fp_send) m_socket_fp_send->abort();
+	m_socket_fp_recv.reset();
+	m_socket_fp_send.reset();
+}
+
+void App::handle_socket_threads_make_them_on(bool on)
+{
+	if (on) {
+		if (!m_threads_socket_on) {
+			m_socket_send_thread = AllegroCPP::Thread([this] {return _socket_send_thread(); });
+			m_socket_recv_thread = AllegroCPP::Thread([this] {return _socket_recv_thread(); });
+			m_threads_socket_on = true;
+			hint_line_set("ENABLED Socket threads!");
+		}
+	}
+	else {
+		if (m_threads_socket_on) {
+			sockets_cleanup();
+			m_socket_send_thread.stop();
+			m_socket_recv_thread.stop();
+
+			std::this_thread::sleep_for(std::chrono::milliseconds(500));
+			//
+			//m_socket_send_thread.join();
+			//m_socket_recv_thread.join();
+			m_threads_socket_on = false;
+			hint_line_set("DISABLED Socket threads!");
+		}
+	}
 }
 
 bool App::send_file_incoming(const std::string& filename)
