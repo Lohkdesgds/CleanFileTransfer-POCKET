@@ -118,9 +118,39 @@ bool App::_think_thread()
 			m_selected_target_for_text->apply_buf();
 			break;
 		default:
-			if (evr.keyboard.unichar > 0 && (isalnum(evr.keyboard.unichar) || evr.keyboard.unichar == ':' || evr.keyboard.unichar == '.') && m_selected_target_for_text->get_buf().length() < max_any_text_len)
-				m_selected_target_for_text->get_buf() += evr.keyboard.unichar;
-			m_selected_target_for_text->apply_buf();
+		{
+			AllegroCPP::Keyboard kb;
+
+			if (kb.get_key_down(ALLEGRO_KEY_LCTRL) || kb.get_key_down(ALLEGRO_KEY_RCTRL))
+			{
+				switch (evr.keyboard.keycode) {
+				case ALLEGRO_KEY_V:
+				{
+					const auto expected = m_selected_target_for_text->get_buf() + m_disp.get_clipboard_text();
+					m_selected_target_for_text->get_buf() = expected.substr(0, max_any_text_len);
+					m_selected_target_for_text->apply_buf();
+				}
+					break;
+				case ALLEGRO_KEY_C:
+				{
+					m_disp.set_clipboard_text(m_selected_target_for_text->get_buf());
+				}
+				break;
+				case ALLEGRO_KEY_X:
+				{
+					m_disp.set_clipboard_text(m_selected_target_for_text->get_buf());
+					m_selected_target_for_text->get_buf() = "";
+					m_selected_target_for_text->apply_buf();
+				}
+					break;
+				}
+			}
+			else {
+				if (evr.keyboard.unichar > 0 && (isalnum(evr.keyboard.unichar) || evr.keyboard.unichar == ':' || evr.keyboard.unichar == '.') && m_selected_target_for_text->get_buf().length() < max_any_text_len)
+					m_selected_target_for_text->get_buf() += evr.keyboard.unichar;
+				m_selected_target_for_text->apply_buf();
+			}
+		}
 			break;
 		}
 		break;
